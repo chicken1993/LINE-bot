@@ -2,6 +2,7 @@ from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
+import os
 
 app = Flask(__name__)
 
@@ -9,8 +10,8 @@ app = Flask(__name__)
 def home():
     return "Hello from LINE bot!"
 
-CHANNEL_ACCESS_TOKEN = "Sw87dewMvMr62IdT9ajyxDiKS7QaN9+RJTftPuEAbTB5OFS2wU7J49MeHT71UlPXpsyWn9PaSfdMyN17C+fZxrujGyY7K53pBOYGDQxvXoBN1CFMpJWYY2bGlFcBdnBYxuYBmLWWhX0FbS20PdHsZQdB04t89/1O/w1cDnyilFU="
-CHANNEL_SECRET = "9893629cbabdb7270d0163b095bbe665"
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
 
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
@@ -40,9 +41,6 @@ def handle_message(event):
             )
         )
 
-import os
-
-import os
-
+# 👇 ここ大事（最後）
 port = int(os.environ.get("PORT", 5000))
 app.run(host="0.0.0.0", port=port)
