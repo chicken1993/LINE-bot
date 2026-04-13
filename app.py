@@ -18,7 +18,7 @@ def load_data():
         with open(FILE_NAME, "r") as f:
             return json.load(f)
     except:
-        return []
+        return {}
 
 def save_data(data):
     with open(FILE_NAME, "w") as f:
@@ -57,7 +57,7 @@ def handle_message(event):
     data = load_data()
 
     if text == "合計":
-        total = sum(data)
+        total = sum(data[user_id])
         reply_text = f"合計：{total}円"
 
     else:
@@ -66,7 +66,11 @@ def handle_message(event):
             price = int(price)
 
             # データ追加
-            data.append(price)
+            # ユーザー初回なら作る
+if user_id not in data:
+    data[user_id] = []
+
+data[user_id].append(price)
 
             # 保存
             save_data(data)
