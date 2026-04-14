@@ -93,13 +93,13 @@ def handle_message(event):
     text = event.message.text
     print("受信:", text, "ユーザー:", user_id)
 
-    if text == "合計":
+    if text.strip() == "合計":
         total = get_total(user_id)
         reply_text = f"合計：{total}円"
 
     else:
         try:
-            name, price = text.split()
+            name, price = text.replace("　", " ").split()
             price = int(price)
 
             save_expense(user_id, price)
