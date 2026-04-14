@@ -1,6 +1,27 @@
+from flask import Flask, request, abort
+from linebot.v3 import WebhookHandler
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
+from linebot.v3.webhooks import MessageEvent, TextMessageContent
+import os
+from dotenv import load_dotenv
 import sqlite3
 
-# DB初期化
+# .env読み込み
+load_dotenv()
+
+app = Flask(__name__)
+
+# 環境変数
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
+
+configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
+
+# ======================
+# DB関係
+# ======================
+
 def init_db():
     conn = sqlite3.connect("kakeibo.db")
     c = conn.cursor()
@@ -14,7 +35,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# 保存
 def save_expense(user_id, amount):
     conn = sqlite3.connect("kakeibo.db")
     c = conn.cursor()
@@ -25,7 +45,6 @@ def save_expense(user_id, amount):
     conn.commit()
     conn.close()
 
-# 合計取得
 def get_total(user_id):
     conn = sqlite3.connect("kakeibo.db")
     c = conn.cursor()
@@ -37,7 +56,31 @@ def get_total(user_id):
     conn.close()
     return total if total else 0
 
+# ======================
+# ルーティング
+# ======================
+
+@app.route("/")
+def home():
+    return "Hello from LINE bot!"
+
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers['X-Line-Signature']
+    body = request.get_data(as_text=True)
+
+    try:
+        handler.handle(body, signature)
+    except Exception as e:
+        print("エラー:", e)
+        abort(400)
+
+    return 'OK'
+
+# ======================
 # LINE処理
+# ======================
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_id = event.source.user_id
@@ -53,7 +96,6 @@ def handle_message(event):
             name, price = text.split()
             price = int(price)
 
-            # DBに保存
             save_expense(user_id, price)
 
             reply_text = f"{name} を {price}円で記録したよ！"
@@ -70,7 +112,10 @@ def handle_message(event):
             )
         )
 
-# 起動時
+# ======================
+# 起動
+# ======================
+
 if __name__ == "__main__":
     init_db()
     port = int(os.environ.get("PORT", 5000))
