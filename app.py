@@ -98,9 +98,34 @@ def handle_message(event):
         reply_text = f"合計：{total}円"
 
     else:
-        try:
-            name, price = text.replace("　", " ").split()
-            price = int(price)
+    try:
+        import re
+
+        text = text.strip()
+        text = text.replace("　", " ")
+        text = text.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+
+        # 許可するパターン（文字＋数字＋スペース＋円）
+        if not re.match(r'^[ぁ-んァ-ン一-龥a-zA-Z0-9\s円]+$', text):
+            raise Exception("不正な文字")
+
+        # 数字抽出
+        numbers = re.findall(r"\d+", text)
+
+        if not numbers:
+            raise Exception("金額なし")
+
+        price = int(numbers[-1])
+
+        # 商品名
+        name = re.sub(r"\d+|円", "", text).strip()
+
+        save_expense(user_id, price)
+
+        reply_text = f"{name} を {price}円で記録したよ！"
+
+    except:
+        reply_text = "入力がおかしいよ💦（例：ラーメン900）"
 
             save_expense(user_id, price)
 
