@@ -4,7 +4,7 @@ from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMe
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 import os
 from dotenv import load_dotenv
-import sqlite3
+import psycopg2
 import re
 
 load_dotenv()
@@ -17,35 +17,56 @@ CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
+# ======================
+# PostgreSQL接続
+# ======================
+
+def get_conn():
+    return psycopg2.connect(os.getenv("DATABASE_URL"))
+
 def init_db():
-    conn = sqlite3.connect("kakeibo.db")
-    c = conn.cursor()
-    c.execute("""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id TEXT,
             amount INTEGER
         )
     """)
     conn.commit()
+    cur.close()
     conn.close()
 
+# 起動時に実行
 init_db()
 
 def save_expense(user_id, amount):
-    conn = sqlite3.connect("kakeibo.db")
-    c = conn.cursor()
-    c.execute("INSERT INTO expenses (user_id, amount) VALUES (?, ?)", (user_id, amount))
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO expenses (user_id, amount) VALUES (%s, %s)",
+        (user_id, amount)
+    )
     conn.commit()
+    cur.close()
     conn.close()
 
 def get_total(user_id):
-    conn = sqlite3.connect("kakeibo.db")
-    c = conn.cursor()
-    c.execute("SELECT SUM(amount) FROM expenses WHERE user_id=?", (user_id,))
-    total = c.fetchone()[0]
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT SUM(amount) FROM expenses WHERE user_id=%s",
+        (user_id,)
+    )
+    total = cur.fetchone()[0]
+    cur.close()
     conn.close()
     return total if total else 0
+
+# ======================
+# ルーティング
+# ======================
 
 @app.route("/")
 def home():
@@ -63,6 +84,10 @@ def callback():
         abort(400)
 
     return 'OK'
+
+# ======================
+# LINE処理
+# ======================
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
@@ -105,6 +130,10 @@ def handle_message(event):
                 messages=[TextMessage(text=reply_text)]
             )
         )
+
+# ======================
+# 起動
+# ======================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
