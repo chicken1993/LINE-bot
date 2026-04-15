@@ -3,5 +3,5 @@ line-bot-sdk
 gunicorn
 pydantic==1.10.13
 python-dotenv
-psycopg2-binary
+psycopg2-binary==2.9.9
 
