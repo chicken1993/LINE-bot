@@ -1,5 +1,5 @@
 flask
-line-bot-sdk
+line-bot-sdk==3.11.0
 gunicorn
 pydantic==1.10.13
 python-dotenv
