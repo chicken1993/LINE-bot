@@ -31,7 +31,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS expenses (
             id SERIAL PRIMARY KEY,
             user_id TEXT,
-            amount INTEGER
+            amount INTEGER,
+            category TEXT
         )
     """)
     conn.commit()
