@@ -1,7 +1,6 @@
 from flask import Flask, request, abort
-from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot import LineBotApi, WebhookHandler
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import os
 from dotenv import load_dotenv
 import psycopg2
@@ -14,7 +13,7 @@ app = Flask(__name__)
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
 
-configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
@@ -39,15 +38,28 @@ def init_db():
     cur.close()
     conn.close()
 
-# 起動時に実行
 init_db()
 
-def save_expense(user_id, amount):
+# ======================
+# カテゴリ判定
+# ======================
+
+def get_category(name):
+    if any(word in name for word in ["ラーメン", "ご飯", "寿司", "カフェ", "スタバ"]):
+        return "食費"
+    elif any(word in name for word in ["電車", "バス", "タクシー"]):
+        return "交通費"
+    elif any(word in name for word in ["Amazon", "買い物", "服"]):
+        return "買い物"
+    else:
+        return "その他"
+
+def save_expense(user_id, amount, category):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO expenses (user_id, amount) VALUES (%s, %s)",
-        (user_id, amount)
+        "INSERT INTO expenses (user_id, amount, category) VALUES (%s, %s, %s)",
+        (user_id, amount, category)
     )
     conn.commit()
     cur.close()
@@ -90,7 +102,7 @@ def callback():
 # LINE処理
 # ======================
 
-@handler.add(MessageEvent, message=TextMessageContent)
+@handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
     text = event.message.text
@@ -99,6 +111,16 @@ def handle_message(event):
     if text.strip() == "合計":
         total = get_total(user_id)
         reply_text = f"合計：{total}円"
+
+    elif text.strip() == "リセット":
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM expenses WHERE user_id=%s", (user_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        reply_text = "データをリセットしたよ！"
+
     else:
         try:
             text = text.strip()
@@ -115,22 +137,19 @@ def handle_message(event):
             if not name:
                 name = "不明"
 
-            save_expense(user_id, price)
+            category = get_category(name)
+            save_expense(user_id, price, category)
 
-            reply_text = f"{name} を {price}円で記録したよ！"
+            reply_text = f"{name} を {price}円で記録したよ！（{category}）"
 
         except Exception as e:
             print("🔥エラー:", e)
             reply_text = "入力がおかしいよ💦（例：ラーメン900）"
 
-    with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
-        line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[TextMessage(text=reply_text)]
-            )
-        )
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text=reply_text)
+    )
 
 # ======================
 # 起動

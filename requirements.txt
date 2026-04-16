@@ -1,5 +1,5 @@
 flask
-line-bot-sdk==2.4.2
+line-bot-sdk==3.11.0
 gunicorn
 python-dotenv
 psycopg2-binary==2.9.9
