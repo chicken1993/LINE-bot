@@ -38,6 +38,17 @@ def init_db():
     cur.close()
     conn.close()
 
+# 👇ここ追加🔥
+def reset_table():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DROP TABLE IF EXISTS expenses")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# 👇ここ追加🔥（順番重要）
+reset_table()
 init_db()
 
 # ======================
