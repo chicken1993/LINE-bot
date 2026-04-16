@@ -38,18 +38,23 @@ def init_db():
     cur.close()
     conn.close()
 
-# 👇ここ追加🔥
-def reset_table():
+# 起動時にDB作成
+init_db()
+
+# 👇 カラム確認（あとで消す）
+def check_columns():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("DROP TABLE IF EXISTS expenses")
-    conn.commit()
+    cur.execute("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'expenses'
+    """)
+    print("カラム一覧:", cur.fetchall())
     cur.close()
     conn.close()
 
-# 👇ここ追加🔥（順番重要）
-reset_table()
-init_db()
+check_columns()
 
 # ======================
 # カテゴリ判定
