@@ -1,9 +1,15 @@
+# Flask
 from flask import Flask, request, abort
+
+# LINE Bot SDK
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
+
+# 環境変数
 import os
 from dotenv import load_dotenv
-import psycopg2
+
+# 正規表現
 import re
 
 load_dotenv()
@@ -17,83 +23,6 @@ line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
-# PostgreSQL接続
-# ======================
-
-def get_conn():
-    return psycopg2.connect(os.getenv("DATABASE_URL"))
-
-def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS expenses (
-            id SERIAL PRIMARY KEY,
-            user_id TEXT,
-            amount INTEGER,
-            category TEXT
-        )
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
-
-# 起動時にDB作成
-init_db()
-
-# 👇 カラム確認（あとで消す）
-def check_columns():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_name = 'expenses'
-    """)
-    print("カラム一覧:", cur.fetchall())
-    cur.close()
-    conn.close()
-
-check_columns()
-
-# ======================
-# カテゴリ判定
-# ======================
-
-def get_category(name):
-    if any(word in name for word in ["ラーメン", "ご飯", "寿司", "カフェ", "スタバ"]):
-        return "食費"
-    elif any(word in name for word in ["電車", "バス", "タクシー"]):
-        return "交通費"
-    elif any(word in name for word in ["Amazon", "買い物", "服"]):
-        return "買い物"
-    else:
-        return "その他"
-
-def save_expense(user_id, amount, category):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO expenses (user_id, amount, category) VALUES (%s, %s, %s)",
-        (user_id, amount, category)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def get_total(user_id):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT SUM(amount) FROM expenses WHERE user_id=%s",
-        (user_id,)
-    )
-    total = cur.fetchone()[0]
-    cur.close()
-    conn.close()
-    return total if total else 0
-
-# ======================
 # ルーティング
 # ======================
 
@@ -103,64 +32,96 @@ def home():
 
 @app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers['X-Line-Signature']
+    signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
+
+    print("受信:", body)
 
     try:
         handler.handle(body, signature)
     except Exception as e:
         print("エラー:", e)
-        abort(400)
+        return "ERROR", 500
 
-    return 'OK'
+    return 'OK', 200
 
 # ======================
-# LINE処理
+# メッセージ処理
 # ======================
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    user_id = event.source.user_id
     text = event.message.text
-    print("受信:", text, "ユーザー:", user_id)
 
-    if text.strip() == "合計":
-        total = get_total(user_id)
-        reply_text = f"合計：{total}円"
+    print("メッセージ:", text)
 
-    elif text.strip() == "リセット":
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM expenses WHERE user_id=%s", (user_id,))
-        conn.commit()
-        cur.close()
-        conn.close()
-        reply_text = "データをリセットしたよ！"
+    try:
+        # 前処理
+        text_clean = text.strip()
+        text_clean = text_clean.replace("　", " ")
+        text_clean = text_clean.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
 
-    else:
-        try:
-            text = text.strip()
-            text = text.replace("　", " ")
-            text = text.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+        numbers = re.findall(r"\d+", text_clean)
 
-            numbers = re.findall(r"\d+", text)
-            if not numbers:
-                raise Exception("金額なし")
-
+        # ======================
+        # 家計簿っぽい入力
+        # ======================
+        if numbers:
             price = int(numbers[-1])
-
-            name = re.sub(r"\d+|円", "", text).strip()
+            name = re.sub(r"\d+|円", "", text_clean).strip()
             if not name:
                 name = "不明"
 
-            category = get_category(name)
-            save_expense(user_id, price, category)
+            reply_text = f"{name} を {price}円としてメモしたよ！（仮）"
 
-            reply_text = f"{name} を {price}円で記録したよ！（{category}）"
+        # ======================
+        # コマンド系
+        # ======================
+        elif "合計" in text:
+            reply_text = "今はまだ合計機能は準備中だよ！"
 
-        except Exception as e:
-            print("🔥エラー:", e)
-            reply_text = "入力がおかしいよ💦（例：ラーメン900）"
+        elif "リセット" in text:
+            reply_text = "リセット機能はこれから作るよ！"
+
+        elif "予定" in text:
+            reply_text = "予定管理はこれから追加予定！"
+
+        elif "野球" in text:
+            reply_text = """野球中継はこちら👇
+https://www.dazn.com/
+https://sports.nhk.or.jp/
+"""
+
+        elif "天気" in text:
+            reply_text = """天気はこちら👇
+https://weather.yahoo.co.jp/
+"""
+
+        elif "こんにちは" in text or "やあ" in text:
+            reply_text = "こんにちは！秘書としてサポートするよ👍"
+        elif "YouTube" in text or "動画" in text:
+    reply_text = "YouTubeはこちら👇\nhttps://www.youtube.com/"
+
+elif "ニュース" in text:
+    reply_text = "ニュースはこちら👇\nhttps://news.yahoo.co.jp/"
+
+elif "時間" in text:
+    import datetime
+    now = datetime.datetime.now()
+    reply_text = f"今の時間は {now.strftime('%H:%M')} だよ！"
+
+elif "ありがとう" in text:
+    reply_text = "どういたしまして👍"
+
+        # ======================
+        # デフォルト
+        # ======================
+        else:
+            reply_text = "ごめん、まだ対応してない内容だよ💦"
+
+    except Exception as e:
+        print("🔥エラー:", e)
+        reply_text = "エラーが起きた💦"
 
     line_bot_api.reply_message(
         event.reply_token,
