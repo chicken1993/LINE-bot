@@ -53,7 +53,7 @@ def callback():
 def handle_message(event):
     text = event.message.text
 
-    print("メッセージ:", text)
+    print("受信:", text, "ユーザー:", event.source.user_id)
 
     try:
         # 前処理
@@ -61,22 +61,32 @@ def handle_message(event):
         text_clean = text_clean.replace("　", " ")
         text_clean = text_clean.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
 
-        numbers = re.findall(r"\d+", text_clean)
+        # ======================
+        # コマンド系（先に処理）
+        # ======================
+        if "こんにちは" in text or "やあ" in text:
+            reply_text = "こんにちは！秘書としてサポートするよ👍"
 
-        # ======================
-        # 家計簿っぽい入力
-        # ======================
-        if numbers:
-            price = int(numbers[-1])
-            name = re.sub(r"\d+|円", "", text_clean).strip()
-            if not name:
-                name = "不明"
+        elif "天気" in text:
+            reply_text = "天気はこちら👇\nhttps://weather.yahoo.co.jp/"
 
-            reply_text = f"{name} を {price}円としてメモしたよ！（仮）"
+        elif "野球" in text:
+            reply_text = "野球はこちら👇\nhttps://sports.nhk.or.jp/"
 
-        # ======================
-        # コマンド系
-        # ======================
+        elif "YouTube" in text or "動画" in text:
+            reply_text = "YouTubeはこちら👇\nhttps://www.youtube.com/"
+
+        elif "ニュース" in text:
+            reply_text = "ニュースはこちら👇\nhttps://news.yahoo.co.jp/"
+
+        elif "時間" in text:
+            import datetime
+            now = datetime.datetime.now()
+            reply_text = f"今の時間は {now.strftime('%H:%M')} だよ！"
+
+        elif "ありがとう" in text:
+            reply_text = "どういたしまして👍"
+
         elif "合計" in text:
             reply_text = "今はまだ合計機能は準備中だよ！"
 
@@ -86,38 +96,22 @@ def handle_message(event):
         elif "予定" in text:
             reply_text = "予定管理はこれから追加予定！"
 
-        elif "野球" in text:
-            reply_text = """野球中継はこちら👇
-https://www.dazn.com/
-https://sports.nhk.or.jp/
-"""
-
-        elif "天気" in text:
-            reply_text = """天気はこちら👇
-https://weather.yahoo.co.jp/
-"""
-
-        elif "こんにちは" in text or "やあ" in text:
-            reply_text = "こんにちは！秘書としてサポートするよ👍"
-        elif "YouTube" in text or "動画" in text:
-    reply_text = "YouTubeはこちら👇\nhttps://www.youtube.com/"
-
-elif "ニュース" in text:
-    reply_text = "ニュースはこちら👇\nhttps://news.yahoo.co.jp/"
-
-elif "時間" in text:
-    import datetime
-    now = datetime.datetime.now()
-    reply_text = f"今の時間は {now.strftime('%H:%M')} だよ！"
-
-elif "ありがとう" in text:
-    reply_text = "どういたしまして👍"
-
         # ======================
-        # デフォルト
+        # 家計簿（最後に処理）
         # ======================
         else:
-            reply_text = "ごめん、まだ対応してない内容だよ💦"
+            numbers = re.findall(r"\d+", text_clean)
+
+            if numbers:
+                price = int(numbers[-1])
+                name = re.sub(r"\d+|円", "", text_clean).strip()
+                if not name:
+                    name = "不明"
+
+                reply_text = f"{name} を {price}円で記録したよ！"
+
+            else:
+                reply_text = "ごめん、まだ対応してない内容だよ💦"
 
     except Exception as e:
         print("🔥エラー:", e)
