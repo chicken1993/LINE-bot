@@ -3,7 +3,10 @@ from flask import Flask, request, abort
 
 # LINE Bot SDK
 from linebot import LineBotApi, WebhookHandler
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.models import (
+    MessageEvent, TextMessage, TextSendMessage,
+    TemplateSendMessage, ButtonsTemplate, MessageAction
+)
 
 # 環境変数
 import os
@@ -56,15 +59,38 @@ def handle_message(event):
     print("受信:", text, "ユーザー:", event.source.user_id)
 
     try:
-        # 前処理
         text_clean = text.strip()
         text_clean = text_clean.replace("　", " ")
         text_clean = text_clean.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
 
         # ======================
-        # コマンド系（先に処理）
+        # 映画（最優先）
         # ======================
-        if "こんにちは" in text or "やあ" in text:
+        if "映画" in text and "YouTube" not in text and "UNEXT" not in text:
+            reply = TemplateSendMessage(
+                alt_text='映画を見るサービスを選んでね',
+                template=ButtonsTemplate(
+                    title='映画を見る',
+                    text='どこで見る？',
+                    actions=[
+                        MessageAction(label='YouTube', text='映画 YouTube'),
+                        MessageAction(label='U-NEXT', text='映画 UNEXT')
+                    ]
+                )
+            )
+            line_bot_api.reply_message(event.reply_token, reply)
+            return
+
+        elif "映画 YouTube" in text:
+            reply_text = "YouTubeの映画はこちら👇\nhttps://www.youtube.com/results?search_query=映画"
+
+        elif "映画 UNEXT" in text:
+            reply_text = "U-NEXTはこちら👇\nhttps://video.unext.jp/"
+
+        # ======================
+        # その他コマンド
+        # ======================
+        elif "こんにちは" in text or "やあ" in text:
             reply_text = "こんにちは！秘書としてサポートするよ👍"
 
         elif "天気" in text:
@@ -72,9 +98,6 @@ def handle_message(event):
 
         elif "野球" in text:
             reply_text = "野球はこちら👇\nhttps://sports.nhk.or.jp/"
-
-        elif "YouTube" in text or "動画" in text:
-            reply_text = "YouTubeはこちら👇\nhttps://www.youtube.com/"
 
         elif "ニュース" in text:
             reply_text = "ニュースはこちら👇\nhttps://news.yahoo.co.jp/"
@@ -97,7 +120,7 @@ def handle_message(event):
             reply_text = "予定管理はこれから追加予定！"
 
         # ======================
-        # 家計簿（最後に処理）
+        # 家計簿
         # ======================
         else:
             numbers = re.findall(r"\d+", text_clean)
