@@ -1,124 +1,3 @@
-# Flask
-from flask import Flask, request, abort
-
-# LINE Bot SDK
-from linebot import LineBotApi, WebhookHandler
-from linebot.models import (
-    MessageEvent, TextMessage, TextSendMessage,
-    TemplateSendMessage, ButtonsTemplate, MessageAction
-)
-
-# 環境変数
-import os
-from dotenv import load_dotenv
-
-# 正規表現
-import re
-
-# DB
-import psycopg2
-
-load_dotenv()
-
-app = Flask(__name__)
-
-CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
-CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
-
-line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(CHANNEL_SECRET)
-
-# ======================
-# DB（PostgreSQL）
-# ======================
-
-def get_conn():
-    return psycopg2.connect(os.getenv("DATABASE_URL"))
-
-def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS expenses (
-            id SERIAL PRIMARY KEY,
-            user_id TEXT,
-            amount INTEGER,
-            category TEXT
-        )
-    """)
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-init_db()
-
-def save_expense(user_id, amount, category):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute(
-        "INSERT INTO expenses (user_id, amount, category) VALUES (%s, %s, %s)",
-        (user_id, amount, category)
-    )
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def get_total(user_id):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT SUM(amount) FROM expenses WHERE user_id=%s",
-        (user_id,)
-    )
-
-    total = cur.fetchone()[0]
-
-    cur.close()
-    conn.close()
-
-    return total if total else 0
-
-def reset_data(user_id):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute(
-        "DELETE FROM expenses WHERE user_id=%s",
-        (user_id,)
-    )
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-# ======================
-# ルーティング
-# ======================
-
-@app.route("/")
-def home():
-    return "Hello from LINE bot!"
-
-@app.route("/callback", methods=['POST'])
-def callback():
-    signature = request.headers.get('X-Line-Signature', '')
-    body = request.get_data(as_text=True)
-
-    print("受信:", body)
-
-    try:
-        handler.handle(body, signature)
-    except Exception as e:
-        print("エラー:", e)
-        return "ERROR", 500
-
-    return 'OK', 200
-
 # ======================
 # メッセージ処理
 # ======================
@@ -128,6 +7,7 @@ def handle_message(event):
     text = event.message.text
     user_id = event.source.user_id
 
+    print("USER_ID:", user_id)  # ← デバッグ
     print("受信:", text, "ユーザー:", user_id)
 
     try:
@@ -135,7 +15,9 @@ def handle_message(event):
         text_clean = text_clean.replace("　", " ")
         text_clean = text_clean.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
 
+        # ======================
         # 映画
+        # ======================
         if "映画" in text and "YouTube" not in text and "UNEXT" not in text:
             reply = TemplateSendMessage(
                 alt_text='映画を見るサービスを選んでね',
@@ -157,7 +39,9 @@ def handle_message(event):
         elif "映画 UNEXT" in text:
             reply_text = "U-NEXTはこちら👇\nhttps://video.unext.jp/"
 
+        # ======================
         # コマンド
+        # ======================
         elif "合計" in text:
             total = get_total(user_id)
             reply_text = f"合計は {total}円だよ！"
@@ -189,7 +73,9 @@ def handle_message(event):
         elif "予定" in text:
             reply_text = "予定管理はこれから追加予定！"
 
+        # ======================
         # 家計簿
+        # ======================
         else:
             numbers = re.findall(r"\d+", text_clean)
 
@@ -216,11 +102,3 @@ def handle_message(event):
         event.reply_token,
         TextSendMessage(text=reply_text)
     )
-
-# ======================
-# 起動
-# ======================
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
