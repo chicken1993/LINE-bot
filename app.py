@@ -195,27 +195,23 @@ def handle_message(event):
 # 家計簿
 # ======================
 else:
-    # 改行 or スペースで分割
-    lines = re.split(r'[\n ]+', text_clean)
+    # 「名前 + 数字」のセットで抽出
+    items = re.findall(r'([^\d\s]+)\s*(\d+)', text_clean)
 
     total_added = 0
 
-    for line in lines:
-        numbers = re.findall(r"\d+", line)
+    for name, price in items:
+        price = int(price)
 
-        if numbers:
-            price = int(numbers[-1])
-            name = re.sub(r"\d+|円", "", line).strip()
+        if not name:
+            name = "不明"
 
-            if not name:
-                name = "不明"
+        category = "その他"
 
-            category = "その他"
+        print("保存:", user_id, name, price)
+        save_expense(user_id, price, category)
 
-            print("保存:", user_id, name, price)
-            save_expense(user_id, price, category)
-
-            total_added += price
+        total_added += price
 
     if total_added > 0:
         reply_text = f"{total_added}円分まとめて記録したよ！"
