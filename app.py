@@ -191,26 +191,37 @@ def handle_message(event):
         elif "予定" in text:
             reply_text = "予定管理はこれから追加予定！"
 
-        # 家計簿
-        else:
-            numbers = re.findall(r"\d+", text_clean)
+# ======================
+# 家計簿
+# ======================
+else:
+    # 改行 or スペースで分割
+    lines = re.split(r'[\n ]+', text_clean)
 
-            if numbers:
-                price = int(numbers[-1])
-                name = re.sub(r"\d+|円", "", text_clean).strip()
-                if not name:
-                    name = "不明"
+    total_added = 0
 
-                category = "その他"
+    for line in lines:
+        numbers = re.findall(r"\d+", line)
 
-                print("保存:", user_id, price)
-                save_expense(user_id, price, category)
+        if numbers:
+            price = int(numbers[-1])
+            name = re.sub(r"\d+|円", "", line).strip()
 
-                reply_text = f"{name} を {price}円で記録したよ！"
+            if not name:
+                name = "不明"
 
-            else:
-                reply_text = "ごめん、まだ対応してない内容だよ💦"
+            category = "その他"
 
+            print("保存:", user_id, name, price)
+            save_expense(user_id, price, category)
+
+            total_added += price
+
+    if total_added > 0:
+        reply_text = f"{total_added}円分まとめて記録したよ！"
+    else:
+        reply_text = "ごめん、まだ対応してない内容だよ💦"
+ 
     except Exception as e:
         print("🔥エラー:", e)
         reply_text = "エラーが起きた💦"
