@@ -15,6 +15,9 @@ from dotenv import load_dotenv
 # 正規表現
 import re
 
+# DB
+import sqlite3
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -24,6 +27,66 @@ CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
 
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
+
+# ======================
+# DB初期化
+# ======================
+
+def init_db():
+    conn = sqlite3.connect("expenses.db")
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            amount INTEGER,
+            category TEXT
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# 保存
+def save_expense(user_id, amount, category):
+    conn = sqlite3.connect("expenses.db")
+    cur = conn.cursor()
+
+    cur.execute(
+        "INSERT INTO expenses (user_id, amount, category) VALUES (?, ?, ?)",
+        (user_id, amount, category)
+    )
+
+    conn.commit()
+    conn.close()
+
+# 合計
+def get_total(user_id):
+    conn = sqlite3.connect("expenses.db")
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT SUM(amount) FROM expenses WHERE user_id=?",
+        (user_id,)
+    )
+
+    total = cur.fetchone()[0]
+    conn.close()
+
+    return total if total else 0
+
+# リセット
+def reset_data(user_id):
+    conn = sqlite3.connect("expenses.db")
+    cur = conn.cursor()
+
+    cur.execute("DELETE FROM expenses WHERE user_id=?", (user_id,))
+
+    conn.commit()
+    conn.close()
 
 # ======================
 # ルーティング
@@ -55,8 +118,9 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     text = event.message.text
+    user_id = event.source.user_id
 
-    print("受信:", text, "ユーザー:", event.source.user_id)
+    print("受信:", text, "ユーザー:", user_id)
 
     try:
         text_clean = text.strip()
@@ -64,7 +128,7 @@ def handle_message(event):
         text_clean = text_clean.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
 
         # ======================
-        # 映画（最優先）
+        # 映画
         # ======================
         if "映画" in text and "YouTube" not in text and "UNEXT" not in text:
             reply = TemplateSendMessage(
@@ -88,8 +152,16 @@ def handle_message(event):
             reply_text = "U-NEXTはこちら👇\nhttps://video.unext.jp/"
 
         # ======================
-        # その他コマンド
+        # コマンド
         # ======================
+        elif "合計" in text:
+            total = get_total(user_id)
+            reply_text = f"合計は {total}円だよ！"
+
+        elif "リセット" in text:
+            reset_data(user_id)
+            reply_text = "データをリセットしたよ！"
+
         elif "こんにちは" in text or "やあ" in text:
             reply_text = "こんにちは！秘書としてサポートするよ👍"
 
@@ -110,12 +182,6 @@ def handle_message(event):
         elif "ありがとう" in text:
             reply_text = "どういたしまして👍"
 
-        elif "合計" in text:
-            reply_text = "今はまだ合計機能は準備中だよ！"
-
-        elif "リセット" in text:
-            reply_text = "リセット機能はこれから作るよ！"
-
         elif "予定" in text:
             reply_text = "予定管理はこれから追加予定！"
 
@@ -130,6 +196,10 @@ def handle_message(event):
                 name = re.sub(r"\d+|円", "", text_clean).strip()
                 if not name:
                     name = "不明"
+
+                category = "その他"
+
+                save_expense(user_id, price, category)
 
                 reply_text = f"{name} を {price}円で記録したよ！"
 
