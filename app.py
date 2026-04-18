@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 import re
 
 # DB
-import sqlite3
+import psycopg2
 
 load_dotenv()
 
@@ -29,16 +29,19 @@ line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
-# DB初期化
+# DB（PostgreSQL）
 # ======================
 
+def get_conn():
+    return psycopg2.connect(os.getenv("DATABASE_URL"))
+
 def init_db():
-    conn = sqlite3.connect("expenses.db")
+    conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id TEXT,
             amount INTEGER,
             category TEXT
@@ -46,46 +49,51 @@ def init_db():
     """)
 
     conn.commit()
+    cur.close()
     conn.close()
 
 init_db()
 
-# 保存
 def save_expense(user_id, amount, category):
-    conn = sqlite3.connect("expenses.db")
+    conn = get_conn()
     cur = conn.cursor()
 
     cur.execute(
-        "INSERT INTO expenses (user_id, amount, category) VALUES (?, ?, ?)",
+        "INSERT INTO expenses (user_id, amount, category) VALUES (%s, %s, %s)",
         (user_id, amount, category)
     )
 
     conn.commit()
+    cur.close()
     conn.close()
 
-# 合計
 def get_total(user_id):
-    conn = sqlite3.connect("expenses.db")
+    conn = get_conn()
     cur = conn.cursor()
 
     cur.execute(
-        "SELECT SUM(amount) FROM expenses WHERE user_id=?",
+        "SELECT SUM(amount) FROM expenses WHERE user_id=%s",
         (user_id,)
     )
 
     total = cur.fetchone()[0]
+
+    cur.close()
     conn.close()
 
     return total if total else 0
 
-# リセット
 def reset_data(user_id):
-    conn = sqlite3.connect("expenses.db")
+    conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute("DELETE FROM expenses WHERE user_id=?", (user_id,))
+    cur.execute(
+        "DELETE FROM expenses WHERE user_id=%s",
+        (user_id,)
+    )
 
     conn.commit()
+    cur.close()
     conn.close()
 
 # ======================
@@ -127,9 +135,7 @@ def handle_message(event):
         text_clean = text_clean.replace("　", " ")
         text_clean = text_clean.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
 
-        # ======================
         # 映画
-        # ======================
         if "映画" in text and "YouTube" not in text and "UNEXT" not in text:
             reply = TemplateSendMessage(
                 alt_text='映画を見るサービスを選んでね',
@@ -151,9 +157,7 @@ def handle_message(event):
         elif "映画 UNEXT" in text:
             reply_text = "U-NEXTはこちら👇\nhttps://video.unext.jp/"
 
-        # ======================
         # コマンド
-        # ======================
         elif "合計" in text:
             total = get_total(user_id)
             reply_text = f"合計は {total}円だよ！"
@@ -185,9 +189,7 @@ def handle_message(event):
         elif "予定" in text:
             reply_text = "予定管理はこれから追加予定！"
 
-        # ======================
         # 家計簿
-        # ======================
         else:
             numbers = re.findall(r"\d+", text_clean)
 
