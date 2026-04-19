@@ -134,7 +134,10 @@ def handle_message(event):
     try:
         text_clean = text.strip()
         text_clean = text_clean.replace("　", " ")
+        text_clean = text_clean.replace("\n", " ")
         text_clean = text_clean.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+        
+
 
         # 映画
         if "映画" in text and "YouTube" not in text and "UNEXT" not in text:
@@ -158,12 +161,24 @@ def handle_message(event):
         elif "映画 UNEXT" in text:
             reply_text = "U-NEXTはこちら👇\nhttps://video.unext.jp/"
 
-        # コマンド
-        elif "合計" in text:
+        elif "合計" in text_clean and re.search(r'\d+', text_clean):
+            text_tmp = text_clean.replace("合計", "")
+
+            items = re.findall(r'([^\d\s]+)\s*(\d+)', text_tmp)
+
+            total = 0
+            for name, price in items:
+                total += int(price)
+
+            reply_text = f"今回の合計は {total}円だよ！"
+
+        # ======================
+        # DBの合計
+        # ======================
+        elif "合計" in text_clean:
             total = get_total(user_id)
             print("TOTAL:", total)
-            reply_text = f"合計は {total}円だよ！"
-
+            reply_text = f"合計は {total}円だよ！"        
         elif "リセット" in text:
             reset_data(user_id)
             reply_text = "データをリセットしたよ！"
@@ -191,33 +206,32 @@ def handle_message(event):
         elif "予定" in text:
             reply_text = "予定管理はこれから追加予定！"
 
-# ======================
-# 家計簿
-# ======================
-else:
-    # 「名前 + 数字」のセットで抽出
-    items = re.findall(r'([^\d\s]+)\s*(\d+)', text_clean)
+        # ======================
+        # 家計簿
+        # ======================
+        else:
+            items = re.findall(r'([^\d\s]+)\s*(\d+)', text_clean)
 
-    total_added = 0
+            total_added = 0
 
-    for name, price in items:
-        price = int(price)
+            for name, price in items:
+                price = int(price)
 
-        if not name:
-            name = "不明"
+                if not name:
+                    name = "不明"
 
-        category = "その他"
+                category = "その他"
 
-        print("保存:", user_id, name, price)
-        save_expense(user_id, price, category)
+                print("保存:", user_id, name, price)
+                save_expense(user_id, price, category)
 
-        total_added += price
+                total_added += price
 
-    if total_added > 0:
-        reply_text = f"{total_added}円分まとめて記録したよ！"
-    else:
-        reply_text = "ごめん、まだ対応してない内容だよ💦"
- 
+            if total_added > 0:
+                reply_text = f"{total_added}円分まとめて記録したよ！"
+            else:
+                reply_text = "ごめん、まだ対応してない内容だよ💦"
+
     except Exception as e:
         print("🔥エラー:", e)
         reply_text = "エラーが起きた💦"
