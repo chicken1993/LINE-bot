@@ -89,6 +89,24 @@ def get_total(user_id):
 
     return total if total else 0
 
+def get_category_total(user_id, keyword):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT SUM(amount)
+        FROM expenses
+        WHERE user_id=%s AND category=%s
+    """, (user_id, keyword))
+
+    total = cur.fetchone()[0]
+
+    cur.close()
+    conn.close()
+
+    return total if total else 0
+
+
 def reset_data(user_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -176,9 +194,15 @@ def handle_message(event):
         # DBの合計
         # ======================
         elif "合計" in text_clean:
+            keyword = text_clean.replace("合計", "").strip()
+
+            if keyword:
+                total = get_category_total(user_id, keyword)
+                reply_text = f"{keyword}の合計は {total}円だよ！"
+        else:
             total = get_total(user_id)
-            print("TOTAL:", total)
-            reply_text = f"合計は {total}円だよ！"        
+            reply_text = f"合計は {total}円だよ！"
+       
         elif "リセット" in text:
             reset_data(user_id)
             reply_text = "データをリセットしたよ！"
