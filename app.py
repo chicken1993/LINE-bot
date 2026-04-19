@@ -179,29 +179,22 @@ def handle_message(event):
         elif "映画 UNEXT" in text:
             reply_text = "U-NEXTはこちら👇\nhttps://video.unext.jp/"
 
-        elif "合計" in text_clean and re.search(r'\d+', text_clean):
-            text_tmp = text_clean.replace("合計", "")
-
-            items = re.findall(r'([^\d\s]+)\s*(\d+)', text_tmp)
-
-            total = 0
-            for name, price in items:
-                total += int(price)
-
-            reply_text = f"今回の合計は {total}円だよ！"
-
+        
         # ======================
         # DBの合計
         # ======================
         elif "合計" in text_clean:
             keyword = text_clean.replace("合計", "").strip()
 
+            # 「キムチ合計」みたいなケース
             if keyword:
                 total = get_category_total(user_id, keyword)
                 reply_text = f"{keyword}の合計は {total}円だよ！"
-        else:
-            total = get_total(user_id)
-            reply_text = f"合計は {total}円だよ！"
+
+        # 「合計だけ」の場合
+            else:
+                total = get_total(user_id)
+                reply_text = f"合計は {total}円だよ！"
        
         elif "リセット" in text:
             reset_data(user_id)
