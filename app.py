@@ -186,10 +186,12 @@ def handle_message(event):
         elif "合計" in text_clean:
             keyword = text_clean.replace("合計", "").strip()
 
-            # 「キムチ合計」みたいなケース
             if keyword:
                 total = get_category_total(user_id, keyword)
                 reply_text = f"{keyword}の合計は {total}円だよ！"
+        else:
+            total = get_total(user_id)
+            reply_text = f"合計は {total}円だよ！"
 
         # 「合計だけ」の場合
             else:
@@ -237,7 +239,7 @@ def handle_message(event):
                 if not name:
                     name = "不明"
 
-                category = "その他"
+                category = re.sub(r'[0-9０-９]+', '', name).replace("合計", "").strip()
 
                 print("保存:", user_id, name, price)
                 save_expense(user_id, price, category)
