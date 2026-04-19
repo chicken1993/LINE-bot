@@ -183,6 +183,7 @@ def handle_message(event):
         # ======================
         # DBの合計
         # ======================
+        
         elif "合計" in text_clean:
             keyword = text_clean.replace("合計", "").strip()
 
@@ -193,10 +194,6 @@ def handle_message(event):
                 total = get_total(user_id)
                 reply_text = f"合計は {total}円だよ！"
 
-        # 「合計だけ」の場合
-            else:
-                total = get_total(user_id)
-                reply_text = f"合計は {total}円だよ！"
        
         elif "リセット" in text:
             reset_data(user_id)
