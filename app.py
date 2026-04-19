@@ -189,9 +189,9 @@ def handle_message(event):
             if keyword:
                 total = get_category_total(user_id, keyword)
                 reply_text = f"{keyword}の合計は {total}円だよ！"
-        else:
-            total = get_total(user_id)
-            reply_text = f"合計は {total}円だよ！"
+            else:
+                total = get_total(user_id)
+                reply_text = f"合計は {total}円だよ！"
 
         # 「合計だけ」の場合
             else:
