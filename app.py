@@ -1,3 +1,27 @@
+# ======================
+# 必要import
+# ======================
+import os
+import re
+import datetime
+from flask import Flask, request
+
+from linebot import LineBotApi, WebhookHandler
+from linebot.models import (
+    MessageEvent, TextMessage, TextSendMessage,
+    TemplateSendMessage, ButtonsTemplate, MessageAction
+)
+
+app = Flask(__name__)
+
+# ======================
+# ★① handler初期化（これが先！！）
+# ======================
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
+
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
 # メッセージ処理
@@ -41,7 +65,7 @@ def handle_message(event):
             reply_text = "U-NEXTはこちら👇\nhttps://video.unext.jp/"
 
         # ======================
-        # 合計処理（★ここ修正ポイント）
+        # 合計処理
         # ======================
         elif "合計" in text_clean:
             keyword = text_clean.replace("合計", "").strip()
@@ -73,7 +97,6 @@ def handle_message(event):
             reply_text = "ニュースはこちら👇\nhttps://news.yahoo.co.jp/"
 
         elif "時間" in text:
-            import datetime
             now = datetime.datetime.now()
             reply_text = f"今の時間は {now.strftime('%H:%M')} だよ！"
 
