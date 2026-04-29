@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 # ======================
 import re
 import psycopg2
+from threading import Timer
 
 load_dotenv()
 
@@ -38,9 +39,20 @@ line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
-# ユーザーモード（削除だけ使う）
+# モード管理
 # ======================
 user_mode = {}
+
+# ======================
+# 💰 ① 予算管理（ユーザーごと）
+# ======================
+user_budget = {}
+
+def set_budget(user_id, amount):
+    user_budget[user_id] = amount
+
+def get_budget(user_id):
+    return user_budget.get(user_id, 30000)  # デフォルト3万
 
 # ======================
 # DB接続
@@ -52,7 +64,7 @@ def get_conn():
     )
 
 # ======================
-# DB初期化
+# 初期化
 # ======================
 def init_db():
     conn = get_conn()
@@ -91,7 +103,7 @@ def save_expense(user_id, amount, category):
     conn.close()
 
 # ======================
-# ④ 安全削除（最新5件からID削除）
+# 削除
 # ======================
 def delete_expense_by_index(user_id, index):
     conn = get_conn()
@@ -142,11 +154,7 @@ def get_total(user_id):
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT SUM(amount) FROM expenses WHERE user_id=%s",
-        (user_id,)
-    )
-
+    cur.execute("SELECT SUM(amount) FROM expenses WHERE user_id=%s", (user_id,))
     total = cur.fetchone()[0]
 
     cur.close()
@@ -155,7 +163,7 @@ def get_total(user_id):
     return total if total else 0
 
 # ======================
-# ① 今月合計
+# 今月
 # ======================
 def get_month_total(user_id):
     conn = get_conn()
@@ -176,18 +184,18 @@ def get_month_total(user_id):
     return total if total else 0
 
 # ======================
-# ② カテゴリランキング
+# ランキング
 # ======================
 def get_category_rank(user_id):
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT category, SUM(amount) as total
+        SELECT category, SUM(amount)
         FROM expenses
         WHERE user_id=%s
         GROUP BY category
-        ORDER BY total DESC
+        ORDER BY SUM(amount) DESC
         LIMIT 5
     """, (user_id,))
 
@@ -204,23 +212,44 @@ def reset_data(user_id):
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute(
-        "DELETE FROM expenses WHERE user_id=%s",
-        (user_id,)
-    )
-
+    cur.execute("DELETE FROM expenses WHERE user_id=%s", (user_id,))
     conn.commit()
+
     cur.close()
     conn.close()
 
 # ======================
-# ③ PUSH送信
+# PUSH
 # ======================
 def push_message(user_id, text):
     line_bot_api.push_message(
         user_id,
         TextSendMessage(text=text)
     )
+
+# ======================
+# ② カテゴリ自動分類
+# ======================
+def auto_category(text):
+    if any(w in text for w in ["コンビニ", "セブン", "ローソン"]):
+        return "コンビニ"
+    if any(w in text for w in ["ラーメン", "ごはん", "昼飯"]):
+        return "食費"
+    if any(w in text for w in ["電車", "バス"]):
+        return "交通費"
+    return "その他"
+
+# ======================
+# 🌅 ③ 毎朝通知
+# ======================
+def morning_push():
+    for user_id in user_budget.keys():
+        total = get_month_total(user_id)
+        push_message(user_id, f"おはよう☀️ 今月支出：{total}円")
+
+    Timer(86400, morning_push).start()
+
+morning_push()
 
 # ======================
 # Webhook
@@ -233,22 +262,13 @@ def callback():
     try:
         handler.handle(body, signature)
     except Exception as e:
-        print("エラー:", e)
+        print(e)
         return "ERROR", 500
 
     return 'OK', 200
 
 # ======================
-# カテゴリ整形
-# ======================
-def clean_category(text):
-    remove_words = ["に", "で", "を", "入れて", "使った", "購入", "買った"]
-    for w in remove_words:
-        text = text.replace(w, "")
-    return text.strip()
-
-# ======================
-# メイン処理
+# メイン
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -257,24 +277,48 @@ def handle_message(event):
     user_id = event.source.user_id
 
     try:
-        text_clean = text.strip().replace("　", " ").replace("\n", " ")
+        text_clean = text.strip().replace("　", " ")
         text_clean = text_clean.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
 
-        # =====================================================
-        # 🔥① どこでも直接入力OK（最重要）
-        # 例：ラーメンに900円 / コンビニで300円
-        # =====================================================
-        match = re.search(r'(.+?)に\s*(\d+)円?', text_clean)
-
-        if match:
-            category = clean_category(match.group(1))
-            price = int(match.group(2))
-
-            save_expense(user_id, price, category)
+        # ======================
+        # 💰 予算設定コマンド
+        # 例：予算50000
+        # ======================
+        if text.startswith("予算"):
+            amount = int(re.sub(r"\D", "", text))
+            set_budget(user_id, amount)
 
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text=f"{category}に{price}円記録したよ！")
+                TextSendMessage(text=f"予算を{amount}円に設定したよ！")
+            )
+            return
+
+        # ======================
+        # ① 入力自由化
+        # ======================
+        match = re.search(r'(.+?)[にで]?(\d+)\s*円?', text_clean)
+
+        if match:
+            raw_category = match.group(1)
+            price = int(match.group(2))
+
+            category = auto_category(raw_category)
+
+            save_expense(user_id, price, category)
+
+            # ======================
+            # 🚨 予算チェック（自動）
+            # ======================
+            total = get_month_total(user_id)
+            budget = get_budget(user_id)
+
+            if total > budget:
+                push_message(user_id, f"⚠️予算超え！{total}円 / {budget}円")
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"{category} {price}円記録したよ！")
             )
             return
 
@@ -283,13 +327,14 @@ def handle_message(event):
         # ======================
         if "家計簿" in text:
             reply = TemplateSendMessage(
-                alt_text='家計簿メニュー',
+                alt_text="menu",
                 template=ButtonsTemplate(
-                    title='家計簿',
-                    text='何する？',
+                    title="家計簿",
+                    text="選んで",
                     actions=[
-                        MessageAction(label='削除', text='削除'),
-                        MessageAction(label='履歴', text='履歴')
+                        MessageAction(label="削除", text="削除"),
+                        MessageAction(label="履歴", text="履歴"),
+                        MessageAction(label="合計", text="合計")
                     ]
                 )
             )
@@ -301,9 +346,9 @@ def handle_message(event):
         # ======================
         if "削除" in text:
             user_mode[user_id] = "delete"
-            history = get_history(user_id)
 
-            msg = "番号選んで👇\n"
+            history = get_history(user_id)
+            msg = "番号👇\n"
             for i, (c, a) in enumerate(history, 1):
                 msg += f"{i}. {c} {a}円\n"
 
@@ -313,71 +358,45 @@ def handle_message(event):
         if user_mode.get(user_id) == "delete":
             if text.isdigit():
                 delete_expense_by_index(user_id, int(text)-1)
-                reply_text = "削除したよ"
+                reply_text = "削除した"
             else:
-                reply_text = "数字で選んでね"
+                reply_text = "数字で"
 
             user_mode[user_id] = None
 
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=reply_text)
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
 
         # ======================
-        # 履歴
+        # その他
         # ======================
         if "履歴" in text:
             history = get_history(user_id)
-            reply_text = "\n".join([f"{c} {a}円" for c, a in history]) or "履歴なし"
+            reply_text = "\n".join([f"{c} {a}円" for c, a in history]) or "なし"
 
-        # ======================
-        # 合計
-        # ======================
         elif "合計" in text:
-            reply_text = f"合計は {get_total(user_id)}円"
+            reply_text = f"{get_total(user_id)}円"
 
-        # ======================
-        # 今月
-        # ======================
         elif "今月" in text:
-            reply_text = f"今月は {get_month_total(user_id)}円"
+            reply_text = f"{get_month_total(user_id)}円"
 
-        # ======================
-        # ランキング
-        # ======================
         elif "ランキング" in text:
             ranks = get_category_rank(user_id)
-            reply_text = "ランキング👇\n"
-            for c, t in ranks:
-                reply_text += f"{c}: {t}円\n"
+            reply_text = "\n".join([f"{c}:{t}円" for c, t in ranks])
 
-        # ======================
-        # リセット
-        # ======================
         elif "リセット" in text:
             reset_data(user_id)
-            reply_text = "リセットしたよ"
+            reply_text = "リセットした"
 
-        # ======================
-        # ③ PUSH通知テスト
-        # ======================
         elif "通知" in text:
-            push_message(user_id, "これはPUSH通知だよ")
+            push_message(user_id, "テスト通知")
             return
 
         else:
-            reply_text = "そのまま「ラーメンに900円」って送ればOK！"
+            reply_text = "そのまま金額送ってOK"
 
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=reply_text)
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
     except Exception as e:
-        print("🔥エラー:", e)
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="エラー発生")
-        )
+        print(e)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="エラー"))
