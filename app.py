@@ -13,7 +13,7 @@ from linebot.models import (
 )
 
 # ======================
-# 環境変数（APIキーなど）
+# 環境変数
 # ======================
 import os
 from dotenv import load_dotenv
@@ -29,38 +29,32 @@ load_dotenv()
 app = Flask(__name__)
 
 # ======================
-# ★① LINE Botの認証設定
+# ★① LINE設定
 # ======================
-# LINE Developersで取得したトークンとシークレットを読み込む
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
 
-# LINE API操作用
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
-
-# Webhook受信用（ここにLINEのメッセージが届く）
 handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
-# ★② データベース接続
+# ★② ユーザーモード管理 ←追加
+# ======================
+user_mode = {}
+
+# ======================
+# ★③ DB接続
 # ======================
 def get_conn():
-    """
-    SupabaseなどのPostgreSQLに接続する
-    """
     return psycopg2.connect(
         os.getenv("DATABASE_URL"),
         sslmode="require"
     )
 
-# ======================
-# DB初期化（テーブル作成）
-# ======================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # 家計簿テーブル
     cur.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
             id SERIAL PRIMARY KEY,
@@ -75,16 +69,9 @@ def init_db():
     cur.close()
     conn.close()
 
-# アプリ起動時に実行
 init_db()
 
-# ======================
-# データ保存
-# ======================
 def save_expense(user_id, amount, category):
-    """
-    支出を保存
-    """
     conn = get_conn()
     cur = conn.cursor()
 
@@ -97,13 +84,7 @@ def save_expense(user_id, amount, category):
     cur.close()
     conn.close()
 
-# ======================
-# データ削除（最新1件）
-# ======================
 def delete_last_expense(user_id, amount):
-    """
-    同じ金額の最新データを1件削除
-    """
     conn = get_conn()
     cur = conn.cursor()
 
@@ -120,9 +101,6 @@ def delete_last_expense(user_id, amount):
     cur.close()
     conn.close()
 
-# ======================
-# 履歴取得（最新5件）
-# ======================
 def get_history(user_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -142,9 +120,6 @@ def get_history(user_id):
 
     return rows
 
-# ======================
-# 合計取得
-# ======================
 def get_total(user_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -161,9 +136,6 @@ def get_total(user_id):
 
     return total if total else 0
 
-# ======================
-# 全削除（リセット）
-# ======================
 def reset_data(user_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -178,18 +150,14 @@ def reset_data(user_id):
     conn.close()
 
 # ======================
-# ★③ LINEからのリクエスト受信口
+# callback
 # ======================
 @app.route("/callback", methods=['POST'])
 def callback():
-    """
-    LINEからメッセージが送られるとここに来る
-    """
     signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
 
     try:
-        # handlerがメッセージ内容を解析
         handler.handle(body, signature)
     except Exception as e:
         print("エラー:", e)
@@ -198,22 +166,16 @@ def callback():
     return 'OK', 200
 
 # ======================
-# カテゴリ文字の掃除
+# カテゴリ整形
 # ======================
 def clean_category(text):
-    """
-    「ラーメンに」「ラーメン買った」などを
-    → 「ラーメン」にする
-    """
     remove_words = ["に", "で", "を", "入れて", "使った", "購入", "買った"]
-
     for w in remove_words:
         text = text.replace(w, "")
-
     return text.strip()
 
 # ======================
-# ★メイン処理（ここが脳みそ）
+# メイン処理
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -222,14 +184,38 @@ def handle_message(event):
     user_id = event.source.user_id
 
     try:
-        # 入力を整形
         text_clean = text.strip()
         text_clean = text_clean.replace("　", " ")
         text_clean = text_clean.replace("\n", " ")
         text_clean = text_clean.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
 
         # ======================
-        # UI：家計簿メニュー
+        # 🎯 削除モード処理 ←追加
+        # ======================
+        if user_mode.get(user_id) == "delete":
+            if text.isdigit():
+                index = int(text) - 1
+                history = get_history(user_id)
+
+                if 0 <= index < len(history):
+                    category, amount = history[index]
+                    delete_last_expense(user_id, amount)
+                    reply_text = f"{category} {amount}円を削除したよ"
+                else:
+                    reply_text = "番号が違うよ"
+            else:
+                reply_text = "数字で選んでね"
+
+            user_mode[user_id] = None
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=reply_text)
+            )
+            return
+
+        # ======================
+        # UIメニュー
         # ======================
         if "家計簿" in text:
             reply = TemplateSendMessage(
@@ -248,7 +234,7 @@ def handle_message(event):
             return
 
         # ======================
-        # 履歴表示
+        # 履歴
         # ======================
         elif "履歴" in text:
             history = get_history(user_id)
@@ -267,21 +253,28 @@ def handle_message(event):
             return
 
         # ======================
-        # 削除（-900）
+        # 🎯 削除モード開始 ←追加
         # ======================
-        match_del = re.search(r'-\s*(\d+)', text_clean)
-        if match_del:
-            amount = int(match_del.group(1))
-            delete_last_expense(user_id, amount)
+        elif "削除" in text:
+            user_mode[user_id] = "delete"
+
+            history = get_history(user_id)
+
+            if history:
+                msg = "削除する番号を選んで👇\n"
+                for i, (c, a) in enumerate(history, 1):
+                    msg += f"{i}. {c} {a}円\n"
+            else:
+                msg = "履歴なし"
 
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text=f"{amount}円削除したよ")
+                TextSendMessage(text=msg)
             )
             return
 
         # ======================
-        # 入力（ラーメンに900円）
+        # 入力
         # ======================
         match = re.search(r'(.+?)に\s*(\d+)円?', text_clean)
         if match:
