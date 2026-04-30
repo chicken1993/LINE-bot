@@ -48,7 +48,7 @@ line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
-# DB
+# DB接続
 # ======================
 def get_conn():
     return psycopg2.connect(
@@ -57,13 +57,14 @@ def get_conn():
     )
 
 # ======================
-# 初期化
+# 初期化（expenses）
 # ======================
 def init_db():
     try:
         conn = get_conn()
         cur = conn.cursor()
 
+        # 支出テーブル
         cur.execute("""
             CREATE TABLE IF NOT EXISTS expenses (
                 id SERIAL PRIMARY KEY,
@@ -71,6 +72,14 @@ def init_db():
                 amount INTEGER,
                 category TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # ユーザーテーブル（初回判定）
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                is_first BOOLEAN DEFAULT TRUE
             )
         """)
 
@@ -82,6 +91,51 @@ def init_db():
         print("DB init error:", e)
 
 init_db()
+
+# ======================
+# 初回チェック①
+# ======================
+def is_first_user(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("SELECT is_first FROM users WHERE user_id=%s", (user_id,))
+    result = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    if result is None:
+        return True
+    return result[0]
+
+# ======================
+# 初回登録②
+# ======================
+def mark_user_init(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO users (user_id, is_first)
+        VALUES (%s, FALSE)
+        ON CONFLICT (user_id) DO UPDATE SET is_first = FALSE
+    """, (user_id,))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# ======================
+# 初回メッセージ④
+# ======================
+def send_first_message(event):
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(
+            text="🎉ようこそ！\nまずは『メニュー』って送ってね💰"
+        )
+    )
 
 # ======================
 # 保存
@@ -170,7 +224,7 @@ def chart(user_id):
     return "no data"
 
 # ======================
-# メニュー（Flex）
+# メニュー
 # ======================
 def send_menu(event):
 
@@ -198,27 +252,15 @@ def send_menu(event):
                     {
                         "type": "button",
                         "style": "primary",
-                        "action": {
-                            "type": "message",
-                            "label": "💰入力",
-                            "text": "家計簿"
-                        }
+                        "action": {"type": "message", "label": "💰入力", "text": "家計簿"}
                     },
                     {
                         "type": "button",
-                        "action": {
-                            "type": "message",
-                            "label": "📊グラフ",
-                            "text": "グラフ"
-                        }
+                        "action": {"type": "message", "label": "📊グラフ", "text": "グラフ"}
                     },
                     {
                         "type": "button",
-                        "action": {
-                            "type": "message",
-                            "label": "📅今月",
-                            "text": "今月"
-                        }
+                        "action": {"type": "message", "label": "📅今月", "text": "今月"}
                     }
                 ]
             }
@@ -239,7 +281,7 @@ def callback():
     return 'OK', 200
 
 # ======================
-# メイン
+# メイン処理
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -250,15 +292,21 @@ def handle_message(event):
     try:
 
         # ======================
+        # ① 初回判定（追加）
+        # ======================
+        if is_first_user(user_id):
+            mark_user_init(user_id)
+            send_first_message(event)
+            return
+
+        # ======================
         # メニュー
         # ======================
         if text == "メニュー":
             send_menu(event)
             return
 
-        # ======================
         # 今月
-        # ======================
         if text == "今月":
             total = get_month_total(user_id)
 
@@ -268,9 +316,7 @@ def handle_message(event):
             )
             return
 
-        # ======================
         # グラフ
-        # ======================
         if text == "グラフ":
             image_url = f"https://line-bot-ujj2.onrender.com/chart/{user_id}"
 
@@ -283,9 +329,7 @@ def handle_message(event):
             )
             return
 
-        # ======================
         # 支出入力
-        # ======================
         match = re.search(r'(.+?)[にで]?(\d+)', text)
 
         if match:
@@ -300,16 +344,14 @@ def handle_message(event):
             )
             return
 
-        # ======================
         # デフォルト
-        # ======================
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text="『メニュー』って送ってね")
         )
 
     except Exception as e:
-        print(e)
+        print("handler error:", e)
 
 # ======================
 # 起動
