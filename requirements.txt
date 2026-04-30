@@ -3,3 +3,4 @@ line-bot-sdk
 psycopg2-binary
 matplotlib
 python-dotenv
+gunicorn
