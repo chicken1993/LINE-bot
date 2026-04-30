@@ -1,3 +1,6 @@
+# =========================================================
+# メイン処理（完成版）
+# =========================================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
 
@@ -79,7 +82,7 @@ def handle_message(event):
             return
 
         # ======================
-        # 🔥③ フォールバック（最強保険）
+        # 🔥 フォールバック
         # ======================
         line_bot_api.reply_message(
             event.reply_token,
