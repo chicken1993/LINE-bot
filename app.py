@@ -1,7 +1,7 @@
 # ======================
-# Flask（Webサーバー）
+# Flask
 # ======================
-from flask import Flask, request, send_file
+from flask import Flask, request, Response
 
 # ======================
 # LINE Bot SDK
@@ -14,24 +14,25 @@ from linebot.models import (
 )
 
 # ======================
-# 環境変数
+# 基本
 # ======================
 import os
+import re
+import io
+import time
 from dotenv import load_dotenv
 
 # ======================
 # DB
 # ======================
-import re
 import psycopg2
 
 # ======================
 # グラフ
 # ======================
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import io
 
 # ======================
 # 初期化
@@ -50,10 +51,7 @@ handler = WebhookHandler(CHANNEL_SECRET)
 # DB接続
 # =========================================================
 def get_conn():
-    return psycopg2.connect(
-        os.getenv("DATABASE_URL"),
-        sslmode="require"
-    )
+    return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
 
 # =========================================================
@@ -95,7 +93,7 @@ init_db()
 
 
 # =========================================================
-# ユーザー初回判定
+# 初回判定
 # =========================================================
 def is_first_user(user_id):
     conn = get_conn()
@@ -126,7 +124,67 @@ def mark_user_init(user_id):
 
 
 # =========================================================
-# リッチメニュー作成
+# カテゴリ分類（強化版）
+# =========================================================
+def classify_category(text):
+
+    rules = {
+        "食費": ["コンビニ", "ご飯", "ランチ", "カフェ", "ラーメン", "外食"],
+        "交通費": ["電車", "バス", "タクシー", "ガソリン"],
+        "娯楽": ["ゲーム", "映画", "カラオケ", "遊び"],
+        "日用品": ["シャンプー", "洗剤", "日用品"],
+        "通信費": ["スマホ", "WiFi", "通信"]
+    }
+
+    for category, keywords in rules.items():
+        for kw in keywords:
+            if kw in text:
+                return category
+
+    return "その他"
+
+
+# =========================================================
+# 支出保存
+# =========================================================
+def save_expense(user_id, amount, category):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute(
+        "INSERT INTO expenses (user_id, amount, category) VALUES (%s,%s,%s)",
+        (user_id, amount, category)
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+# =========================================================
+# 今月合計
+# =========================================================
+def get_month_total(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COALESCE(SUM(amount),0)
+        FROM expenses
+        WHERE user_id=%s
+        AND DATE_TRUNC('month', created_at)=DATE_TRUNC('month', CURRENT_DATE)
+    """, (user_id,))
+
+    r = cur.fetchone()[0]
+
+    cur.close()
+    conn.close()
+
+    return r
+
+
+# =========================================================
+# リッチメニュー
 # =========================================================
 def create_rich_menu():
     return RichMenu(
@@ -135,21 +193,53 @@ def create_rich_menu():
         name="家計簿UI",
         chat_bar_text="メニュー",
         areas=[
-            RichMenuArea(bounds={"x":0,"y":0,"w":1250,"h":843},
+            RichMenuArea(bounds={"x":0,"y":0,"width":1250,"height":843},
                          action=MessageAction(label="入力", text="家計簿")),
-            RichMenuArea(bounds={"x":1250,"y":0,"w":1250,"h":843},
+            RichMenuArea(bounds={"x":1250,"y":0,"width":1250,"height":843},
                          action=MessageAction(label="グラフ", text="グラフ")),
-            RichMenuArea(bounds={"x":0,"y":843,"w":1250,"h":843},
+            RichMenuArea(bounds={"x":0,"y":843,"width":1250,"height":843},
                          action=MessageAction(label="今月", text="今月")),
-            RichMenuArea(bounds={"x":1250,"y":843,"w":1250,"h":843},
+            RichMenuArea(bounds={"x":1250,"y":843,"width":1250,"height":843},
                          action=MessageAction(label="メニュー", text="メニュー"))
         ]
     )
 
 
-# =========================================================
-# ⭐リッチメニューID管理
-# =========================================================
+def set_rich_menu_image(rich_menu_id):
+    try:
+        path = os.path.join(os.path.dirname(__file__), "menu.jpg")
+
+        with open(path, "rb") as f:
+            line_bot_api.set_rich_menu_image(
+                rich_menu_id,
+                "image/jpeg",
+                f
+            )
+    except Exception as e:
+        print("image set error:", e)
+
+
+def setup_rich_menu_once():
+    try:
+        existing = get_rich_menu_id()
+        if existing:
+            return existing
+
+        rich_menu = create_rich_menu()
+        rich_menu_id = line_bot_api.create_rich_menu(rich_menu)
+
+        time.sleep(1)
+        set_rich_menu_image(rich_menu_id)
+
+        save_rich_menu_id(rich_menu_id)
+
+        return rich_menu_id
+
+    except Exception as e:
+        print("setup rich menu error:", e)
+        return None
+
+
 def save_rich_menu_id(rich_menu_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -178,119 +268,77 @@ def get_rich_menu_id():
     return r[0] if r else None
 
 
-# =========================================================
-# ⭐① 画像設定（追加）
-# =========================================================
-def set_rich_menu_image(rich_menu_id):
-    with open("menu.jpg", "rb") as f:
-        line_bot_api.set_rich_menu_image(
-            rich_menu_id,
-            "image/jpeg",
-            f
-        )
-
-
-# =========================================================
-# ⭐② 完全版リッチメニュー作成
-# =========================================================
-def setup_rich_menu_once():
-    try:
-        existing = get_rich_menu_id()
-
-        if existing:
-            return existing
-
-        rich_menu = create_rich_menu()
-        rich_menu_id = line_bot_api.create_rich_menu(rich_menu)
-
-        set_rich_menu_image(rich_menu_id)  # ★重要
-
-        save_rich_menu_id(rich_menu_id)
-
-        return rich_menu_id
-
-    except Exception as e:
-        print("setup rich menu error:", e)
-        return None
-
-
-# =========================================================
-# ユーザー紐付け
-# =========================================================
 def set_user_rich_menu(user_id):
     try:
         rich_menu_id = setup_rich_menu_once()
-
         if rich_menu_id:
             line_bot_api.link_rich_menu_to_user(user_id, rich_menu_id)
-
     except Exception as e:
         print("link error:", e)
 
 
 # =========================================================
-# 支出保存
+# グラフ生成（LINE対応100%）
 # =========================================================
-def save_expense(user_id, amount, category):
-    conn = get_conn()
-    cur = conn.cursor()
+@app.route("/chart/<user_id>")
+def chart(user_id):
 
-    cur.execute(
-        "INSERT INTO expenses (user_id, amount, category) VALUES (%s,%s,%s)",
-        (user_id, amount, category)
-    )
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-# =========================================================
-# 今月
-# =========================================================
-def get_month_total(user_id):
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT COALESCE(SUM(amount),0)
+        SELECT category, SUM(amount)
         FROM expenses
         WHERE user_id=%s
-        AND DATE_TRUNC('month', created_at)=DATE_TRUNC('month', CURRENT_DATE)
+        GROUP BY category
+        ORDER BY SUM(amount) DESC
     """, (user_id,))
 
-    r = cur.fetchone()[0]
+    data = cur.fetchall()
 
     cur.close()
     conn.close()
 
-    return r
+    if not data:
+        return "no data"
+
+    labels = [d[0] for d in data]
+    values = [d[1] for d in data]
+
+    plt.figure(figsize=(6,6))
+    plt.pie(values, labels=labels, autopct="%1.1f%%")
+    plt.title("支出グラフ")
+
+    img = io.BytesIO()
+    plt.savefig(img, format="png")
+    img.seek(0)
+
+    return Response(img.getvalue(), mimetype="image/png")
 
 
 # =========================================================
-# メッセージ
+# Flaskルート
 # =========================================================
-def send_first_message(event):
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage("🎉ようこそ！メニューから使えるよ")
-    )
+@app.route("/")
+def home():
+    return "OK"
 
 
-# =========================================================
-# webhook
-# =========================================================
 @app.route("/callback", methods=["POST"])
 def callback():
     body = request.get_data(as_text=True)
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers.get("X-Line-Signature")
 
-    handler.handle(body, signature)
+    try:
+        handler.handle(body, signature)
+    except Exception as e:
+        print("Webhook error:", e)
+
     return "OK"
 
 
 # =========================================================
-# メイン
+# メイン処理
 # =========================================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -300,15 +348,19 @@ def handle_message(event):
 
     try:
 
-        # 初回
         if is_first_user(user_id):
             mark_user_init(user_id)
             set_user_rich_menu(user_id)
-            send_first_message(event)
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage("🎉ようこそ！")
+            )
             return
 
         if text == "今月":
             total = get_month_total(user_id)
+
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(f"今月：{total}円")
@@ -316,7 +368,7 @@ def handle_message(event):
             return
 
         if text == "グラフ":
-            url = f"https://line-bot-ujj2.onrender.com/chart/{user_id}"
+            url = f"https://line-bot-1-gizk.onrender.com/chart/{user_id}"
 
             line_bot_api.reply_message(
                 event.reply_token,
@@ -327,7 +379,10 @@ def handle_message(event):
         match = re.search(r'(.+?)[にで]?(\d+)', text)
 
         if match:
-            save_expense(user_id, int(match.group(2)), match.group(1))
+            category = classify_category(text)
+            amount = int(match.group(2))
+
+            save_expense(user_id, amount, category)
 
             line_bot_api.reply_message(
                 event.reply_token,
@@ -335,13 +390,8 @@ def handle_message(event):
             )
             return
 
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage("メニュー使ってね")
-        )
-
     except Exception as e:
-        print(e)
+        print("error:", e)
 
 
 # =========================================================
