@@ -10,7 +10,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage,
     ImageSendMessage,
-    RichMenu, RichMenuArea, MessageAction
+    RichMenu, RichMenuArea, RichMenuBounds, MessageAction
 )
 
 # ======================
@@ -124,7 +124,7 @@ def mark_user_init(user_id):
 
 
 # =========================================================
-# カテゴリ分類（強化版）
+# カテゴリ分類
 # =========================================================
 def classify_category(text):
 
@@ -193,51 +193,35 @@ def create_rich_menu():
         name="家計簿UI",
         chat_bar_text="メニュー",
         areas=[
-            RichMenuArea(bounds={"x":0,"y":0,"width":1250,"height":843},
-                         action=MessageAction(label="入力", text="家計簿")),
-            RichMenuArea(bounds={"x":1250,"y":0,"width":1250,"height":843},
-                         action=MessageAction(label="グラフ", text="グラフ")),
-            RichMenuArea(bounds={"x":0,"y":843,"width":1250,"height":843},
-                         action=MessageAction(label="今月", text="今月")),
-            RichMenuArea(bounds={"x":1250,"y":843,"width":1250,"height":843},
-                         action=MessageAction(label="メニュー", text="メニュー"))
+            RichMenuArea(
+                bounds=RichMenuBounds(x=0, y=0, width=1250, height=843),
+                action=MessageAction(text="家計簿")
+            ),
+            RichMenuArea(
+                bounds=RichMenuBounds(x=1250, y=0, width=1250, height=843),
+                action=MessageAction(text="グラフ")
+            ),
+            RichMenuArea(
+                bounds=RichMenuBounds(x=0, y=843, width=1250, height=843),
+                action=MessageAction(text="今月")
+            ),
+            RichMenuArea(
+                bounds=RichMenuBounds(x=1250, y=843, width=1250, height=843),
+                action=MessageAction(text="メニュー")
+            )
         ]
     )
 
 
 def set_rich_menu_image(rich_menu_id):
-    try:
-        path = os.path.join(os.path.dirname(__file__), "menu.jpg")
+    path = "menu.jpg"
 
-        with open(path, "rb") as f:
-            line_bot_api.set_rich_menu_image(
-                rich_menu_id,
-                "image/jpeg",
-                f
-            )
-    except Exception as e:
-        print("image set error:", e)
-
-
-def setup_rich_menu_once():
-    try:
-        existing = get_rich_menu_id()
-        if existing:
-            return existing
-
-        rich_menu = create_rich_menu()
-        rich_menu_id = line_bot_api.create_rich_menu(rich_menu)
-
-        time.sleep(1)
-        set_rich_menu_image(rich_menu_id)
-
-        save_rich_menu_id(rich_menu_id)
-
-        return rich_menu_id
-
-    except Exception as e:
-        print("setup rich menu error:", e)
-        return None
+    with open(path, "rb") as f:
+        line_bot_api.set_rich_menu_image(
+            rich_menu_id,
+            "image/jpeg",
+            f
+        )
 
 
 def save_rich_menu_id(rich_menu_id):
@@ -268,6 +252,30 @@ def get_rich_menu_id():
     return r[0] if r else None
 
 
+def setup_rich_menu_once():
+    try:
+        existing = get_rich_menu_id()
+        if existing:
+            return existing
+
+        rich_menu = create_rich_menu()
+        rich_menu_id = line_bot_api.create_rich_menu(rich_menu)
+
+        time.sleep(1)
+        set_rich_menu_image(rich_menu_id)
+
+        save_rich_menu_id(rich_menu_id)
+
+        # ★ 全体表示（超重要）
+        line_bot_api.set_default_rich_menu(rich_menu_id)
+
+        return rich_menu_id
+
+    except Exception as e:
+        print("setup error:", e)
+        return None
+
+
 def set_user_rich_menu(user_id):
     try:
         rich_menu_id = setup_rich_menu_once()
@@ -278,7 +286,7 @@ def set_user_rich_menu(user_id):
 
 
 # =========================================================
-# グラフ生成（LINE対応100%）
+# グラフ
 # =========================================================
 @app.route("/chart/<user_id>")
 def chart(user_id):
@@ -317,13 +325,8 @@ def chart(user_id):
 
 
 # =========================================================
-# Flaskルート
+# LINE Webhook
 # =========================================================
-@app.route("/")
-def home():
-    return "OK"
-
-
 @app.route("/callback", methods=["POST"])
 def callback():
     body = request.get_data(as_text=True)
@@ -338,13 +341,16 @@ def callback():
 
 
 # =========================================================
-# メイン処理
+# メイン処理（🔥ここが修正ポイント）
 # =========================================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
 
-    text = event.message.text.strip()
+    text = event.message.text  # ← strip削除（重要）
     user_id = event.source.user_id
+
+    # 🔥 デバッグ
+    print("DEBUG TEXT:", repr(text))
 
     try:
 
@@ -358,7 +364,7 @@ def handle_message(event):
             )
             return
 
-        if text == "今月":
+        if "今月" in text:
             total = get_month_total(user_id)
 
             line_bot_api.reply_message(
@@ -367,12 +373,22 @@ def handle_message(event):
             )
             return
 
-        if text == "グラフ":
+        if "グラフ" in text:
             url = f"https://line-bot-1-gizk.onrender.com/chart/{user_id}"
 
             line_bot_api.reply_message(
                 event.reply_token,
-                ImageSendMessage(url, url)
+                ImageSendMessage(
+                    original_content_url=url,
+                    preview_image_url=url
+                )
+            )
+            return
+
+        if "メニュー" in text:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage("入力→記録\nグラフ→分析\n今月→合計")
             )
             return
 
