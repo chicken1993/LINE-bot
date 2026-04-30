@@ -1,5 +1,5 @@
 # ======================
-# Flask（Webサーバー）
+# Flask
 # ======================
 from flask import Flask, request, send_file
 
@@ -9,7 +9,7 @@ from flask import Flask, request, send_file
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage,
-    ImageSendMessage
+    ImageSendMessage, FlexSendMessage
 )
 
 # ======================
@@ -23,12 +23,13 @@ from dotenv import load_dotenv
 # ======================
 import re
 import psycopg2
+from datetime import datetime
 
 # ======================
 # グラフ
 # ======================
 import matplotlib
-matplotlib.use('Agg')  # ★重要（Render対策）
+matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
 import io
@@ -47,7 +48,7 @@ line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
-# DB接続
+# DB
 # ======================
 def get_conn():
     return psycopg2.connect(
@@ -56,7 +57,7 @@ def get_conn():
     )
 
 # ======================
-# 初期化（安全版）
+# 初期化
 # ======================
 def init_db():
     try:
@@ -80,7 +81,6 @@ def init_db():
     except Exception as e:
         print("DB init error:", e)
 
-# ★起動時に実行（落ちてもOK）
 init_db()
 
 # ======================
@@ -100,7 +100,28 @@ def save_expense(user_id, amount, category):
     conn.close()
 
 # ======================
-# グラフ作成
+# 今月合計
+# ======================
+def get_month_total(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT SUM(amount)
+        FROM expenses
+        WHERE user_id = %s
+        AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
+    """, (user_id,))
+
+    total = cur.fetchone()[0]
+
+    cur.close()
+    conn.close()
+
+    return total or 0
+
+# ======================
+# 円グラフ
 # ======================
 def create_pie_chart(user_id):
     conn = get_conn()
@@ -124,12 +145,15 @@ def create_pie_chart(user_id):
     labels = [row[0] for row in data]
     sizes = [row[1] for row in data]
 
-    plt.figure()
-    plt.pie(sizes, labels=labels, autopct='%1.1f%%')
+    plt.figure(figsize=(6,6))
+    plt.pie(sizes, autopct='%1.1f%%', startangle=90)
+    plt.legend(labels, loc="best")
+    plt.title("支出グラフ")
+    plt.tight_layout()
 
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
-    plt.close()  # ★重要
+    plt.close()
     buf.seek(0)
 
     return buf
@@ -146,6 +170,64 @@ def chart(user_id):
     return "no data"
 
 # ======================
+# メニュー（Flex）
+# ======================
+def send_menu(event):
+
+    flex_message = FlexSendMessage(
+        alt_text="家計簿メニュー",
+        contents={
+            "type": "bubble",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "💰 家計簿メニュー",
+                        "weight": "bold",
+                        "size": "lg"
+                    }
+                ]
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "contents": [
+                    {
+                        "type": "button",
+                        "style": "primary",
+                        "action": {
+                            "type": "message",
+                            "label": "💰入力",
+                            "text": "家計簿"
+                        }
+                    },
+                    {
+                        "type": "button",
+                        "action": {
+                            "type": "message",
+                            "label": "📊グラフ",
+                            "text": "グラフ"
+                        }
+                    },
+                    {
+                        "type": "button",
+                        "action": {
+                            "type": "message",
+                            "label": "📅今月",
+                            "text": "今月"
+                        }
+                    }
+                ]
+            }
+        }
+    )
+
+    line_bot_api.reply_message(event.reply_token, flex_message)
+
+# ======================
 # LINE受信
 # ======================
 @app.route("/callback", methods=['POST'])
@@ -157,7 +239,7 @@ def callback():
     return 'OK', 200
 
 # ======================
-# メイン処理
+# メイン
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -166,6 +248,25 @@ def handle_message(event):
     user_id = event.source.user_id
 
     try:
+
+        # ======================
+        # メニュー
+        # ======================
+        if text == "メニュー":
+            send_menu(event)
+            return
+
+        # ======================
+        # 今月
+        # ======================
+        if text == "今月":
+            total = get_month_total(user_id)
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"今月の支出：{total}円")
+            )
+            return
 
         # ======================
         # グラフ
@@ -204,14 +305,14 @@ def handle_message(event):
         # ======================
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="例：ラーメン900 / グラフ")
+            TextSendMessage(text="『メニュー』って送ってね")
         )
 
     except Exception as e:
         print(e)
 
 # ======================
-# Render起動設定
+# 起動
 # ======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
