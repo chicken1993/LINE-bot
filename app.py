@@ -1,5 +1,62 @@
+# ======================
+# Flask
+# ======================
+from flask import Flask, request, Response
+
+# ======================
+# LINE Bot SDK
+# ======================
+from linebot import LineBotApi, WebhookHandler
+from linebot.models import (
+    MessageEvent, TextMessage, TextSendMessage,
+    ImageSendMessage,
+    RichMenu, RichMenuArea, RichMenuBounds, MessageAction
+)
+
+# ======================
+# 基本
+# ======================
+import os
+import re
+import io
+import time
+from dotenv import load_dotenv
+
+# ======================
+# DB
+# ======================
+import psycopg2
+
+# ======================
+# グラフ
+# ======================
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+# ======================
+# 初期化
+# ======================
+load_dotenv()
+app = Flask(__name__)
+
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
+
+# 🔥 これが先！！
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
+
+
 # =========================================================
-# メイン処理（完成版）
+# DB接続
+# =========================================================
+def get_conn():
+    return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
+
+
+# =========================================================
+# メイン処理（ここに書く）
 # =========================================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -7,87 +64,58 @@ def handle_message(event):
     text = event.message.text
     user_id = event.source.user_id
 
-    # ======================
-    # 🔥 デバッグログ
-    # ======================
     print("DEBUG TEXT:", repr(text))
 
     try:
 
-        # ======================
-        # 初回
-        # ======================
-        if is_first_user(user_id):
-            mark_user_init(user_id)
-            set_user_rich_menu(user_id)
-
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("🎉ようこそ！")
-            )
-            return
-
-        # ======================
-        # 今月
-        # ======================
         if "今月" in text:
-            total = get_month_total(user_id)
-
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(f"今月：{total}円")
+                TextSendMessage("今月チェック")
             )
             return
 
-        # ======================
-        # グラフ
-        # ======================
         if "グラフ" in text:
-            url = f"https://line-bot-1-gizk.onrender.com/chart/{user_id}"
-
             line_bot_api.reply_message(
                 event.reply_token,
-                ImageSendMessage(
-                    original_content_url=url,
-                    preview_image_url=url
-                )
+                TextSendMessage("グラフ表示")
             )
             return
 
-        # ======================
-        # メニュー
-        # ======================
         if "メニュー" in text:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage("入力→記録\nグラフ→分析\n今月→合計")
+                TextSendMessage("メニュー表示")
             )
             return
 
-        # ======================
-        # 金額入力
-        # ======================
-        match = re.search(r'(.+?)[にで]?(\d+)', text)
-
-        if match:
-            category = classify_category(text)
-            amount = int(match.group(2))
-
-            save_expense(user_id, amount, category)
-
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("記録OK")
-            )
-            return
-
-        # ======================
-        # 🔥 フォールバック
-        # ======================
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage("⚠️コマンドが認識できません\n「メニュー」と送ってください")
+            TextSendMessage("⚠️認識できません")
         )
 
     except Exception as e:
         print("error:", e)
+
+
+# =========================================================
+# Webhook
+# =========================================================
+@app.route("/callback", methods=["POST"])
+def callback():
+    body = request.get_data(as_text=True)
+    signature = request.headers.get("X-Line-Signature")
+
+    try:
+        handler.handle(body, signature)
+    except Exception as e:
+        print("Webhook error:", e)
+
+    return "OK"
+
+
+# =========================================================
+# 起動
+# =========================================================
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
