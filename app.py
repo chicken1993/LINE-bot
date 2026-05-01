@@ -4,7 +4,7 @@
 from flask import Flask, request, Response
 
 # ======================
-# LINE Bot SDK（LINEとやり取りするためのライブラリ）
+# LINE Bot SDK
 # ======================
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import (
@@ -16,36 +16,34 @@ from linebot.models import (
 # ======================
 # 基本ライブラリ
 # ======================
-import os          # 環境変数を扱う
-import re          # 文字から数字を取り出す
-import io          # 画像データを一時保存
-import traceback   # エラー表示
-from dotenv import load_dotenv  # .envを読み込む
+import os
+import re
+import io
+import traceback
+from dotenv import load_dotenv
 
 # ======================
-# データベース（PostgreSQL）
+# DB
 # ======================
 import psycopg2
 
 # ======================
-# グラフ作成
+# グラフ
 # ======================
 import matplotlib
-matplotlib.use("Agg")  # サーバーでも動くようにする
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # ======================
 # 初期設定
 # ======================
-load_dotenv()  # .env読み込み
-app = Flask(__name__)  # Flask起動
+load_dotenv()
+app = Flask(__name__)
 
-# LINEの秘密キー読み込み
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
-BASE_URL = os.getenv("BASE_URL")  # RenderのURL
+BASE_URL = os.getenv("BASE_URL")
 
-# LINE API接続
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
@@ -53,17 +51,16 @@ handler = WebhookHandler(CHANNEL_SECRET)
 # DB接続
 # =========================================================
 def get_conn():
-    # PostgreSQLに接続
     return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
 # =========================================================
-# テーブル作成（初回だけ）
+# DB初期化（★予算テーブル追加済み）
 # =========================================================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # 支出データ
+    # 支出
     cur.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
             id SERIAL PRIMARY KEY,
@@ -74,10 +71,11 @@ def init_db():
         )
     """)
 
-    # ユーザー（今回はほぼ使ってない）
+    # 👇 予算テーブル
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id TEXT PRIMARY KEY
+        CREATE TABLE IF NOT EXISTS budgets (
+            user_id TEXT PRIMARY KEY,
+            monthly_budget INTEGER
         )
     """)
 
@@ -85,17 +83,15 @@ def init_db():
     cur.close()
     conn.close()
 
-# 起動時に実行
 init_db()
 
 # =========================================================
-# カテゴリ自動判定
+# カテゴリ分類
 # =========================================================
 def classify_category(text):
-    # キーワードで自動分類
     rules = [
-        ("食費", ["コンビニ", "セブン", "ファミマ", "ローソン", "ご飯", "ランチ"]),
-        ("交通費", ["電車", "バス", "タクシー"]),
+        ("食費", ["コンビニ", "セブン", "ファミマ", "ローソン", "ご飯"]),
+        ("交通費", ["電車", "バス"]),
         ("娯楽", ["ゲーム", "映画"]),
         ("通信費", ["スマホ", "wifi"]),
     ]
@@ -108,13 +104,12 @@ def classify_category(text):
     return "その他"
 
 # =========================================================
-# データ保存
+# DB処理
 # =========================================================
 def save_expense(user_id, amount, category):
     conn = get_conn()
     cur = conn.cursor()
 
-    # DBに保存
     cur.execute(
         "INSERT INTO expenses (user_id, amount, category) VALUES (%s,%s,%s)",
         (user_id, amount, category)
@@ -124,14 +119,10 @@ def save_expense(user_id, amount, category):
     cur.close()
     conn.close()
 
-# =========================================================
-# 今月の合計
-# =========================================================
 def get_month_total(user_id):
     conn = get_conn()
     cur = conn.cursor()
 
-    # 今月だけ合計
     cur.execute("""
         SELECT COALESCE(SUM(amount),0)
         FROM expenses
@@ -147,31 +138,60 @@ def get_month_total(user_id):
     return total
 
 # =========================================================
-# リッチメニュー作成（LINEの下のボタン）
+# 👇 予算関連
+# =========================================================
+def set_budget(user_id, amount):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO budgets (user_id, monthly_budget)
+        VALUES (%s, %s)
+        ON CONFLICT (user_id)
+        DO UPDATE SET monthly_budget = %s
+    """, (user_id, amount, amount))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def get_budget(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT monthly_budget FROM budgets WHERE user_id=%s
+    """, (user_id,))
+
+    r = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    return r[0] if r else None
+
+# =========================================================
+# リッチメニュー
 # =========================================================
 def create_rich_menu():
     return RichMenu(
-        size=RichMenuSize(width=2500, height=1686),  # ←画像サイズと一致必須
+        size=RichMenuSize(width=2500, height=1686),
         selected=True,
         name="家計簿メニュー",
         chat_bar_text="メニュー",
         areas=[
-            # 左上
             RichMenuArea(
                 bounds=RichMenuBounds(x=0, y=0, width=1250, height=843),
                 action=MessageAction(label="入力", text="家計簿")
             ),
-            # 右上
             RichMenuArea(
                 bounds=RichMenuBounds(x=1250, y=0, width=1250, height=843),
                 action=MessageAction(label="グラフ", text="グラフ")
             ),
-            # 左下
             RichMenuArea(
                 bounds=RichMenuBounds(x=0, y=843, width=1250, height=843),
                 action=MessageAction(label="今月", text="今月")
             ),
-            # 右下
             RichMenuArea(
                 bounds=RichMenuBounds(x=1250, y=843, width=1250, height=843),
                 action=MessageAction(label="取り消し", text="取り消し")
@@ -179,43 +199,30 @@ def create_rich_menu():
         ]
     )
 
-# =========================================================
-# メニューをLINEに登録
-# =========================================================
 def setup_rich_menu():
     try:
         rich_menu = create_rich_menu()
-
-        # LINEにメニュー作成
         rich_menu_id = line_bot_api.create_rich_menu(rich_menu)
 
-        # 画像を設定（menu.jpg）
         with open("menu.jpg", "rb") as f:
             line_bot_api.set_rich_menu_image(rich_menu_id, "image/jpeg", f)
 
-        # 全ユーザーに適用
         line_bot_api.set_default_rich_menu(rich_menu_id)
 
         return rich_menu_id
-
-    except Exception:
+    except:
         print(traceback.format_exc())
 
-# =========================================================
-# ユーザーにメニューを表示
-# =========================================================
 def set_user_menu(user_id):
     try:
         rich_menu_id = setup_rich_menu()
-
         if rich_menu_id:
-            # このユーザーにメニューを紐付け
             line_bot_api.link_rich_menu_to_user(user_id, rich_menu_id)
     except:
         print(traceback.format_exc())
 
 # =========================================================
-# グラフ表示URL
+# グラフ
 # =========================================================
 @app.route("/chart/<user_id>")
 def chart(user_id):
@@ -223,7 +230,6 @@ def chart(user_id):
     conn = get_conn()
     cur = conn.cursor()
 
-    # カテゴリごとの合計
     cur.execute("""
         SELECT category, SUM(amount)
         FROM expenses
@@ -242,11 +248,9 @@ def chart(user_id):
     labels = [d[0] for d in data]
     values = [d[1] for d in data]
 
-    # 円グラフ作成
     plt.figure(figsize=(6,6))
     plt.pie(values, labels=labels, autopct="%1.1f%%")
 
-    # 画像化
     img = io.BytesIO()
     plt.savefig(img, format="png")
     plt.close()
@@ -255,7 +259,7 @@ def chart(user_id):
     return Response(img.getvalue(), mimetype="image/png")
 
 # =========================================================
-# LINEからのリクエスト受け取り
+# Webhook
 # =========================================================
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -270,19 +274,38 @@ def callback():
     return "OK"
 
 # =========================================================
-# メイン処理（ここが一番重要）
+# メイン処理
 # =========================================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
 
-    text = event.message.text.strip()  # ユーザーの入力
-    user_id = event.source.user_id     # ユーザーID
+    text = event.message.text.strip()
+    user_id = event.source.user_id
 
     try:
-        # 毎回メニューを表示（テスト用）
         set_user_menu(user_id)
 
-        # メニュー説明
+        # ======================
+        # 👇 予算設定
+        # ======================
+        if text.startswith("予算"):
+            match = re.search(r'(\d+)', text)
+
+            if match:
+                amount = int(match.group(1))
+                set_budget(user_id, amount)
+
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(f"予算：{amount}円に設定しました")
+                )
+            else:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage("例：予算 50000")
+                )
+            return
+
         if text == "家計簿":
             line_bot_api.reply_message(
                 event.reply_token,
@@ -290,16 +313,30 @@ def handle_message(event):
             )
             return
 
-        # 今月合計
+        # ======================
+        # 👇 今月＋残り＋警告
+        # ======================
         if text == "今月":
             total = get_month_total(user_id)
+            budget = get_budget(user_id)
+
+            if budget:
+                remain = budget - total
+                msg = f"今月：{total}円\n残り：{remain}円"
+
+                if remain < 0:
+                    msg += "\n⚠️ 予算オーバー！"
+                elif total > budget * 0.8:
+                    msg += "\n⚠️ 使いすぎ注意"
+            else:
+                msg = f"今月：{total}円\n※予算未設定"
+
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(f"今月：{total}円")
+                TextSendMessage(msg)
             )
             return
 
-        # グラフ表示
         if text == "グラフ":
             url = f"{BASE_URL}/chart/{user_id}"
             line_bot_api.reply_message(
@@ -311,7 +348,6 @@ def handle_message(event):
             )
             return
 
-        # 直前削除
         if text == "取り消し":
             conn = get_conn()
             cur = conn.cursor()
@@ -336,7 +372,9 @@ def handle_message(event):
             )
             return
 
-        # 数字があれば支出として記録
+        # ======================
+        # 支出記録
+        # ======================
         match = re.search(r'(\d+)', text)
 
         if match:
