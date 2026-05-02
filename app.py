@@ -12,7 +12,8 @@ from linebot.models import (
     ImageSendMessage,
     TemplateSendMessage, ButtonsTemplate,
     MessageAction,
-    FlexSendMessage
+    FlexSendMessage,
+    PostbackEvent
 )
 
 # ======================
@@ -48,6 +49,9 @@ BASE_URL = os.getenv("BASE_URL")
 
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
+
+# 🔥 一時データ保存（重要）
+user_temp_data = {}
 
 valid_categories = ["食費", "交通費", "娯楽", "その他"]
 
@@ -215,8 +219,8 @@ def send_amount_flex(reply_token, category):
             "type": "box",
             "layout": "vertical",
             "contents": [
-                {"type": "text", "text": f"{category} を選択", "weight": "bold", "size": "lg"},
-                {"type": "text", "text": "金額を選んでね👇", "size": "sm"}
+                {"type": "text", "text": f"{category} を選択", "weight": "bold"},
+                {"type": "text", "text": "金額選んで👇"}
             ]
         },
         "footer": {
@@ -235,7 +239,7 @@ def send_amount_flex(reply_token, category):
         FlexSendMessage(alt_text="金額選択", contents=bubble)
     )
 
-# 🔥 履歴Flex UI
+# 履歴Flex
 def send_history_flex(reply_token, data):
     contents = []
 
@@ -251,19 +255,11 @@ def send_history_flex(reply_token, data):
 
     bubble = {
         "type": "bubble",
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-                {"type": "text", "text": "履歴削除", "weight": "bold", "size": "lg"},
-                {"type": "text", "text": "削除する項目を選択👇", "size": "sm"}
-            ]
-        },
-        "footer": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": contents
-        }
+        "body": {"type": "box","layout": "vertical","contents":[
+            {"type": "text","text": "履歴削除","weight": "bold"},
+            {"type": "text","text": "削除するもの選択👇"}
+        ]},
+        "footer": {"type": "box","layout": "vertical","contents": contents}
     }
 
     line_bot_api.reply_message(
@@ -276,7 +272,6 @@ def send_history_flex(reply_token, data):
 # ======================
 @app.route("/chart/<user_id>")
 def chart(user_id):
-
     conn = get_conn()
     cur = conn.cursor()
 
@@ -303,7 +298,7 @@ def chart(user_id):
     plt.axis('equal')
 
     img = io.BytesIO()
-    plt.savefig(img, format="png", bbox_inches="tight")
+    plt.savefig(img, format="png")
     plt.close()
     img.seek(0)
 
@@ -329,11 +324,34 @@ def home():
     return "OK"
 
 # ======================
-# Postback（重要🔥）
+# Postback処理（削除）
 # ======================
-@handler.add(MessageEvent)
+@handler.add(PostbackEvent)
 def handle_postback(event):
-    pass
+    try:
+        data = event.postback.data
+
+        if data.startswith("delete_"):
+            delete_id = data.replace("delete_", "")
+
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM expenses WHERE id=%s", (delete_id,))
+            conn.commit()
+            cur.close()
+            conn.close()
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage("削除完了✅")
+            )
+
+    except:
+        print(traceback.format_exc())
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage("エラー出た😇")
+        )
 
 # ======================
 # メイン処理
@@ -355,7 +373,59 @@ def handle_message(event):
             send_history_flex(event.reply_token, data)
             return
 
-        # 他は今まで通り（省略してOK）
+        if text == "今月":
+            total = get_month_total(user_id)
+            budget = get_budget(user_id)
+
+            if budget:
+                remain = budget - total
+                msg = f"今月：{total}円\n残り：{remain}円"
+            else:
+                msg = f"今月：{total}円\n※予算未設定"
+
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
+            return
+
+        if text == "家計簿":
+            set_state(user_id, "category")
+            send_category_menu(event.reply_token)
+            return
+
+        if state and state[0] == "category":
+            text = category_alias.get(text, text)
+            set_state(user_id, "amount", text)
+            send_amount_flex(event.reply_token, text)
+            return
+
+        if state and state[0] == "amount":
+            match = re.search(r'(\d+)', text)
+            if match:
+                amount = int(match.group(1))
+                category = state[1]
+
+                save_expense(user_id, amount, category)
+                clear_state(user_id)
+
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(f"{category}：{amount}円 登録完了")
+                )
+                return
+
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage("『家計簿』って送ってね")
+        )
 
     except:
         print(traceback.format_exc())
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage("エラー出た😇")
+        )
+
+# ======================
+# 起動
+# ======================
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
