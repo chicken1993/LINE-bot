@@ -36,7 +36,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 
-# 🔥 日本語フォント読み込み
+# 🔥 日本語フォント
 font_path = "ipaexg.ttf"
 font_prop = fm.FontProperties(fname=font_path)
 
@@ -56,14 +56,11 @@ handler = WebhookHandler(CHANNEL_SECRET)
 valid_categories = ["食費", "交通費", "娯楽", "その他"]
 
 # =========================================================
-# DB接続
+# DB
 # =========================================================
 def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
-# =========================================================
-# DB初期化
-# =========================================================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
@@ -75,13 +72,6 @@ def init_db():
             amount INTEGER,
             category TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS budgets (
-            user_id TEXT PRIMARY KEY,
-            monthly_budget INTEGER
         )
     """)
 
@@ -149,27 +139,16 @@ def save_expense(user_id, amount, category):
 def get_month_total(user_id):
     conn = get_conn()
     cur = conn.cursor()
-
     cur.execute("""
         SELECT COALESCE(SUM(amount),0)
         FROM expenses
         WHERE user_id=%s
         AND DATE_TRUNC('month', created_at)=DATE_TRUNC('month', CURRENT_DATE)
     """, (user_id,))
-
     total = cur.fetchone()[0]
     cur.close()
     conn.close()
     return total
-
-def get_budget(user_id):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT monthly_budget FROM budgets WHERE user_id=%s", (user_id,))
-    r = cur.fetchone()
-    cur.close()
-    conn.close()
-    return r[0] if r else None
 
 # =========================================================
 # UI
@@ -191,7 +170,7 @@ def send_category_menu(reply_token):
     line_bot_api.reply_message(reply_token, message)
 
 # =========================================================
-# 🔥 グラフ（日本語完全対応）
+# グラフ
 # =========================================================
 @app.route("/chart/<user_id>")
 def chart(user_id):
@@ -212,19 +191,17 @@ def chart(user_id):
     if not data:
         return Response("no data", status=404)
 
-    labels = [d[0] for d in data]  # 日本語そのまま
+    labels = [d[0] for d in data]
     values = [d[1] for d in data]
 
     plt.figure(figsize=(6,6))
-
     plt.pie(
         values,
         labels=labels,
         autopct="%1.1f%%",
         startangle=90,
-        textprops={"fontproperties": font_prop}  # 🔥 これが重要
+        textprops={"fontproperties": font_prop}
     )
-
     plt.axis('equal')
 
     img = io.BytesIO()
@@ -250,7 +227,7 @@ def callback():
     return "OK"
 
 # =========================================================
-# メイン処理
+# メイン
 # =========================================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -259,11 +236,43 @@ def handle_message(event):
     user_id = event.source.user_id
 
     try:
+        # 🔥 リセット開始
+        if text == "リセット":
+            set_state(user_id, "confirm_reset")
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage("本当に削除する？ YESで確定")
+            )
+            return
+
+        # 🔥 リセット確定
+        state = get_state(user_id)
+        if state and state[0] == "confirm_reset":
+            if text == "YES":
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute("DELETE FROM expenses WHERE user_id=%s", (user_id,))
+                conn.commit()
+                cur.close()
+                conn.close()
+                clear_state(user_id)
+
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage("全データ削除完了🗑️")
+                )
+            else:
+                clear_state(user_id)
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage("キャンセルしたよ")
+                )
+            return
+
         # 取り消し
         if text == "取り消し":
             conn = get_conn()
             cur = conn.cursor()
-
             cur.execute("""
                 DELETE FROM expenses
                 WHERE id = (
@@ -273,7 +282,6 @@ def handle_message(event):
                     LIMIT 1
                 )
             """, (user_id,))
-
             conn.commit()
             cur.close()
             conn.close()
@@ -305,16 +313,13 @@ def handle_message(event):
         # 今月
         if text == "今月":
             total = get_month_total(user_id)
-            msg = f"今月：{total}円"
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(msg)
+                TextSendMessage(f"今月：{total}円")
             )
             return
 
         # 状態処理
-        state = get_state(user_id)
-
         if state:
             step, category = state
 
@@ -324,7 +329,6 @@ def handle_message(event):
                     return
 
                 set_state(user_id, "amount", text)
-
                 line_bot_api.reply_message(
                     event.reply_token,
                     TextSendMessage(f"{text}ですね！金額入力してね")
@@ -333,7 +337,6 @@ def handle_message(event):
 
             if step == "amount":
                 match = re.search(r'(\d+)', text)
-
                 if match:
                     amount = int(match.group(1))
                     save_expense(user_id, amount, category)
