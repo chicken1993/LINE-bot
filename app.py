@@ -91,6 +91,13 @@ def init_db():
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS budgets (
+            user_id TEXT PRIMARY KEY,
+            monthly_budget INTEGER
+        )
+    """)
+
     conn.commit()
     cur.close()
     conn.close()
@@ -254,10 +261,20 @@ def chart(user_id):
     labels = [d[0] for d in data]
     values = [d[1] for d in data]
 
-    plt.figure()
-    plt.pie(values, labels=labels, autopct="%1.1f%%")
+    plt.figure(figsize=(6,6))
+
+    # 🔥 日本語対応
+    plt.pie(
+        values,
+        labels=labels,
+        autopct="%1.1f%%",
+        textprops={"fontproperties": font_prop}
+    )
+
+    plt.axis('equal')
+
     img = io.BytesIO()
-    plt.savefig(img, format="png")
+    plt.savefig(img, format="png", bbox_inches="tight")
     plt.close()
     img.seek(0)
 
@@ -294,7 +311,7 @@ def handle_message(event):
 
     try:
         # ======================
-        # 🔥 先に機能系（超重要）
+        # 🔥 機能系（最優先）
         # ======================
 
         if text == "グラフ":
@@ -307,13 +324,58 @@ def handle_message(event):
 
         if text == "今月":
             total = get_month_total(user_id)
+
+            message = TemplateSendMessage(
+                alt_text="今月",
+                template=ButtonsTemplate(
+                    title="今月の状況",
+                    text=f"今月合計：{total}円",
+                    actions=[
+                        MessageAction(label="💰 予算設定", text="予算設定"),
+                        MessageAction(label="🙅 設定しない", text="何もしない")
+                    ]
+                )
+            )
+
+            line_bot_api.reply_message(event.reply_token, message)
+            return
+
+        if text == "予算設定":
+            set_state(user_id, "budget")
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(f"今月合計：{total}円")
+                TextSendMessage("予算いくら？（例：50000）")
+            )
+            return
+
+        if text == "何もしない":
+            clear_state(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage("OK 👍")
             )
             return
 
         if text == "取り消し":
+            set_state(user_id, "delete_menu")
+
+            message = TemplateSendMessage(
+                alt_text="削除メニュー",
+                template=ButtonsTemplate(
+                    title="削除メニュー",
+                    text="どれ削除する？",
+                    actions=[
+                        MessageAction(label="🧹 直前削除", text="直前削除"),
+                        MessageAction(label="📜 履歴削除", text="履歴削除"),
+                        MessageAction(label="❌ キャンセル", text="キャンセル")
+                    ]
+                )
+            )
+
+            line_bot_api.reply_message(event.reply_token, message)
+            return
+
+        if text == "直前削除":
             conn = get_conn()
             cur = conn.cursor()
 
@@ -331,9 +393,11 @@ def handle_message(event):
             cur.close()
             conn.close()
 
+            clear_state(user_id)
+
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage("直前削除OK")
+                TextSendMessage("削除OK")
             )
             return
 
@@ -345,7 +409,6 @@ def handle_message(event):
             send_category_menu(event.reply_token)
             return
 
-        # カテゴリ
         if state and state[0] == "category":
             text = category_alias.get(text, text)
 
@@ -357,7 +420,6 @@ def handle_message(event):
             send_amount_flex(event.reply_token, text)
             return
 
-        # 手入力
         if text == "手入力":
             line_bot_api.reply_message(
                 event.reply_token,
@@ -365,7 +427,6 @@ def handle_message(event):
             )
             return
 
-        # 金額
         if state and state[0] == "amount":
             match = re.search(r'(\d+)', text)
             if match:
@@ -377,7 +438,33 @@ def handle_message(event):
 
                 line_bot_api.reply_message(
                     event.reply_token,
-                    TextSendMessage(f"{category}：{amount}円 OK")
+                    TextSendMessage(f"{category}：{amount}円 登録完了✅")
+                )
+                return
+
+        if state and state[0] == "budget":
+            match = re.search(r'(\d+)', text)
+            if match:
+                amount = int(match.group(1))
+
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO budgets (user_id, monthly_budget)
+                    VALUES (%s, %s)
+                    ON CONFLICT (user_id)
+                    DO UPDATE SET monthly_budget=%s
+                """, (user_id, amount, amount))
+
+                conn.commit()
+                cur.close()
+                conn.close()
+
+                clear_state(user_id)
+
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(f"予算 {amount}円 に設定したよ✅")
                 )
                 return
 
