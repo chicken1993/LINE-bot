@@ -48,7 +48,7 @@ BASE_URL = os.getenv("BASE_URL")
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-valid_categories = ["食費", "交通費", "光熱費", "通信費", "娯楽", "その他"]
+valid_categories = ["食費", "交通費", "娯楽", "その他"]
 
 # =========================================================
 # DB接続
@@ -80,7 +80,6 @@ def init_db():
         )
     """)
 
-    # 🔥 状態テーブル
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_states (
             user_id TEXT PRIMARY KEY,
@@ -185,7 +184,7 @@ def get_budget(user_id):
     return r[0] if r else None
 
 # =========================================================
-# UI
+# 🔥 カテゴリUI（4個制限対応）
 # =========================================================
 def send_category_menu(reply_token):
     message = TemplateSendMessage(
@@ -196,8 +195,6 @@ def send_category_menu(reply_token):
             actions=[
                 MessageAction(label="🍜 食費", text="食費"),
                 MessageAction(label="🚃 交通費", text="交通費"),
-                MessageAction(label="💡 光熱費", text="光熱費"),
-                MessageAction(label="📱 通信費", text="通信費"),
                 MessageAction(label="🎮 娯楽", text="娯楽"),
                 MessageAction(label="📦 その他", text="その他"),
             ]
@@ -267,6 +264,31 @@ def handle_message(event):
     try:
         print("入力:", text)
 
+        # 🔥 取り消し（DB削除）
+        if text == "取り消し":
+            conn = get_conn()
+            cur = conn.cursor()
+
+            cur.execute("""
+                DELETE FROM expenses
+                WHERE id = (
+                    SELECT id FROM expenses
+                    WHERE user_id=%s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                )
+            """, (user_id,))
+
+            conn.commit()
+            cur.close()
+            conn.close()
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage("直前のデータ削除OK")
+            )
+            return
+
         # キャンセル
         if text == "キャンセル":
             clear_state(user_id)
@@ -311,13 +333,12 @@ def handle_message(event):
             )
             return
 
-        # 状態取得
+        # 状態処理
         state = get_state(user_id)
 
         if state:
             step, category = state
 
-            # カテゴリ選択
             if step == "category":
 
                 if text not in valid_categories:
@@ -332,7 +353,6 @@ def handle_message(event):
                 )
                 return
 
-            # 金額入力
             if step == "amount":
                 match = re.search(r'(\d+)', text)
 
