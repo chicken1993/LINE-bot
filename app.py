@@ -34,6 +34,10 @@ import psycopg2
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+
+# 👇 日本語フォント対策（超重要）
+plt.rcParams['font.family'] = 'DejaVu Sans'
 
 # ======================
 # 初期化
@@ -53,15 +57,15 @@ handler = WebhookHandler(CHANNEL_SECRET)
 # ======================
 user_states = {}
 
+# 有効カテゴリ
+valid_categories = ["食費", "交通費", "光熱費", "通信費", "娯楽", "その他"]
+
 # =========================================================
-# DB接続
+# DB
 # =========================================================
 def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
-# =========================================================
-# DB初期化
-# =========================================================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
@@ -146,7 +150,7 @@ def get_budget(user_id):
     return r[0] if r else None
 
 # =========================================================
-# カテゴリUI
+# UI
 # =========================================================
 def send_category_menu(reply_token):
     message = TemplateSendMessage(
@@ -217,7 +221,7 @@ def callback():
     return "OK"
 
 # =========================================================
-# メイン処理（🔥完全版）
+# メイン処理（🔥完成版）
 # =========================================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -226,8 +230,12 @@ def handle_message(event):
     user_id = event.source.user_id
 
     try:
+        # 🔥 デバッグ
+        print("入力:", text)
+        print("状態:", user_states.get(user_id))
+
         # ======================
-        # 🔥 キャンセル（最優先）
+        # キャンセル（最優先）
         # ======================
         if text == "キャンセル":
             user_states.pop(user_id, None)
@@ -238,9 +246,10 @@ def handle_message(event):
             return
 
         # ======================
-        # 🔥 コマンド（状態より優先）
+        # コマンド（状態より優先）
         # ======================
         if text == "家計簿":
+            user_states.pop(user_id, None)  # ←強制リセット
             user_states[user_id] = {"step": "category"}
             send_category_menu(event.reply_token)
             return
@@ -263,11 +272,6 @@ def handle_message(event):
             if budget:
                 remain = budget - total
                 msg = f"今月：{total}円\n残り：{remain}円"
-
-                if remain < 0:
-                    msg += "\n⚠️ 予算オーバー！"
-                elif total > budget * 0.8:
-                    msg += "\n⚠️ 使いすぎ注意"
             else:
                 msg = f"今月：{total}円\n※予算未設定"
 
@@ -295,27 +299,31 @@ def handle_message(event):
             return
 
         # ======================
-        # 🔥 状態処理
+        # 状態処理
         # ======================
         if user_id in user_states:
 
             # カテゴリ選択
             if user_states[user_id]["step"] == "category":
-                category = text
+
+                if text not in valid_categories:
+                    send_category_menu(event.reply_token)
+                    return
 
                 user_states[user_id] = {
                     "step": "amount",
-                    "category": category
+                    "category": text
                 }
 
                 line_bot_api.reply_message(
                     event.reply_token,
-                    TextSendMessage(f"{category}ですね！金額入力してね")
+                    TextSendMessage(f"{text}ですね！金額入力してね")
                 )
                 return
 
             # 金額入力
             if user_states[user_id]["step"] == "amount":
+
                 match = re.search(r'(\d+)', text)
 
                 if match:
@@ -337,7 +345,7 @@ def handle_message(event):
                 return
 
         # ======================
-        # 🔥 フォールバック
+        # フォールバック
         # ======================
         line_bot_api.reply_message(
             event.reply_token,
