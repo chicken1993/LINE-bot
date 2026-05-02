@@ -1,5 +1,5 @@
 # ======================
-# Flask
+# Flask（サーバー）
 # ======================
 from flask import Flask, request, Response
 
@@ -36,7 +36,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 
-# 🔥 日本語フォント
+# 日本語フォント（同じフォルダに置く）
 font_path = "ipaexg.ttf"
 font_prop = fm.FontProperties(fname=font_path)
 
@@ -55,16 +55,20 @@ handler = WebhookHandler(CHANNEL_SECRET)
 
 valid_categories = ["食費", "交通費", "娯楽", "その他"]
 
-# =========================================================
-# DB
-# =========================================================
+# ======================
+# DB接続
+# ======================
 def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
+# ======================
+# DB初期化
+# ======================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
+    # 支出
     cur.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
             id SERIAL PRIMARY KEY,
@@ -75,11 +79,20 @@ def init_db():
         )
     """)
 
+    # 状態
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_states (
             user_id TEXT PRIMARY KEY,
             step TEXT,
             category TEXT
+        )
+    """)
+
+    # 🔥 予算テーブル追加
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS budgets (
+            user_id TEXT PRIMARY KEY,
+            monthly_budget INTEGER
         )
     """)
 
@@ -89,9 +102,9 @@ def init_db():
 
 init_db()
 
-# =========================================================
+# ======================
 # 状態管理
-# =========================================================
+# ======================
 def set_state(user_id, step, category=None):
     conn = get_conn()
     cur = conn.cursor()
@@ -122,9 +135,9 @@ def clear_state(user_id):
     cur.close()
     conn.close()
 
-# =========================================================
+# ======================
 # DB処理
-# =========================================================
+# ======================
 def save_expense(user_id, amount, category):
     conn = get_conn()
     cur = conn.cursor()
@@ -150,9 +163,37 @@ def get_month_total(user_id):
     conn.close()
     return total
 
-# =========================================================
+# 🔥 予算保存
+def set_budget(user_id, amount):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO budgets (user_id, monthly_budget)
+        VALUES (%s, %s)
+        ON CONFLICT (user_id)
+        DO UPDATE SET monthly_budget=%s
+    """, (user_id, amount, amount))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# 🔥 予算取得
+def get_budget(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("SELECT monthly_budget FROM budgets WHERE user_id=%s", (user_id,))
+    r = cur.fetchone()
+
+    cur.close()
+    conn.close()
+    return r[0] if r else None
+
+# ======================
 # UI
-# =========================================================
+# ======================
 def send_category_menu(reply_token):
     message = TemplateSendMessage(
         alt_text="カテゴリ選択",
@@ -169,11 +210,12 @@ def send_category_menu(reply_token):
     )
     line_bot_api.reply_message(reply_token, message)
 
-# =========================================================
+# ======================
 # グラフ
-# =========================================================
+# ======================
 @app.route("/chart/<user_id>")
 def chart(user_id):
+
     conn = get_conn()
     cur = conn.cursor()
 
@@ -211,9 +253,9 @@ def chart(user_id):
 
     return Response(img.getvalue(), mimetype="image/png")
 
-# =========================================================
+# ======================
 # Webhook
-# =========================================================
+# ======================
 @app.route("/callback", methods=["POST"])
 def callback():
     body = request.get_data(as_text=True)
@@ -226,9 +268,9 @@ def callback():
 
     return "OK"
 
-# =========================================================
-# メイン
-# =========================================================
+# ======================
+# メイン処理
+# ======================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
 
@@ -236,69 +278,83 @@ def handle_message(event):
     user_id = event.source.user_id
 
     try:
-        # 🔥 リセット開始
-        if text == "リセット":
-            set_state(user_id, "confirm_reset")
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("本当に削除する？ YESで確定")
-            )
-            return
-
-        # 🔥 リセット確定
         state = get_state(user_id)
-        if state and state[0] == "confirm_reset":
-            if text == "YES":
-                conn = get_conn()
-                cur = conn.cursor()
-                cur.execute("DELETE FROM expenses WHERE user_id=%s", (user_id,))
-                conn.commit()
-                cur.close()
-                conn.close()
-                clear_state(user_id)
 
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage("全データ削除完了🗑️")
-                )
+        # ======================
+        # 今月（🔥ここ進化）
+        # ======================
+        if text == "今月":
+            total = get_month_total(user_id)
+            budget = get_budget(user_id)
+
+            if budget:
+                remain = budget - total
+                msg = f"今月：{total}円\n残り：{remain}円"
             else:
-                clear_state(user_id)
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage("キャンセルしたよ")
+                msg = f"今月：{total}円\n※予算未設定"
+
+            message = TemplateSendMessage(
+                alt_text="今月情報",
+                template=ButtonsTemplate(
+                    title="今月の状況",
+                    text=msg,
+                    actions=[
+                        MessageAction(label="💰 予算を設定", text="予算設定"),
+                        MessageAction(label="❌ 閉じる", text="キャンセル")
+                    ]
                 )
+            )
+
+            line_bot_api.reply_message(event.reply_token, message)
             return
 
-        # 取り消し
-        if text == "取り消し":
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("""
-                DELETE FROM expenses
-                WHERE id = (
-                    SELECT id FROM expenses
-                    WHERE user_id=%s
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                )
-            """, (user_id,))
-            conn.commit()
-            cur.close()
-            conn.close()
-
+        # ======================
+        # 予算設定スタート
+        # ======================
+        if text == "予算設定":
+            set_state(user_id, "budget")
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage("直前のデータ削除OK")
+                TextSendMessage("予算いくら？（例：50000）")
             )
             return
 
+        # ======================
+        # 状態処理
+        # ======================
+        if state:
+            step, category = state
+
+            # 予算入力
+            if step == "budget":
+                match = re.search(r'(\d+)', text)
+                if match:
+                    amount = int(match.group(1))
+                    set_budget(user_id, amount)
+                    clear_state(user_id)
+
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage(f"予算 {amount}円 に設定したよ✅")
+                    )
+                else:
+                    line_bot_api.reply_message(
+                        event.reply_token,
+                        TextSendMessage("数字で入力してね")
+                    )
+                return
+
+        # ======================
         # 家計簿
+        # ======================
         if text == "家計簿":
             set_state(user_id, "category")
             send_category_menu(event.reply_token)
             return
 
+        # ======================
         # グラフ
+        # ======================
         if text == "グラフ":
             url = f"{BASE_URL}/chart/{user_id}"
             line_bot_api.reply_message(
@@ -309,49 +365,6 @@ def handle_message(event):
                 )
             )
             return
-
-        # 今月
-        if text == "今月":
-            total = get_month_total(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(f"今月：{total}円")
-            )
-            return
-
-        # 状態処理
-        if state:
-            step, category = state
-
-            if step == "category":
-                if text not in valid_categories:
-                    send_category_menu(event.reply_token)
-                    return
-
-                set_state(user_id, "amount", text)
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(f"{text}ですね！金額入力してね")
-                )
-                return
-
-            if step == "amount":
-                match = re.search(r'(\d+)', text)
-                if match:
-                    amount = int(match.group(1))
-                    save_expense(user_id, amount, category)
-                    clear_state(user_id)
-
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(f"{category}：{amount}円 登録完了✅")
-                    )
-                else:
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage("数字で入力してね")
-                    )
-                return
 
         # fallback
         line_bot_api.reply_message(
