@@ -35,7 +35,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# 🔥 日本語→英語変換（これが今回の本体）
+# 🔥 日本語→英語変換（完全固定）
 category_map = {
     "食費": "Food",
     "交通費": "Transport",
@@ -211,7 +211,7 @@ def send_category_menu(reply_token):
     line_bot_api.reply_message(reply_token, message)
 
 # =========================================================
-# グラフ（🔥ここが修正ポイント）
+# 🔥 グラフ（完全修正版）
 # =========================================================
 @app.route("/chart/<user_id>")
 def chart(user_id):
@@ -232,15 +232,24 @@ def chart(user_id):
     if not data:
         return Response("no data", status=404)
 
-    # 🔥 日本語→英語変換
-    labels = [category_map.get(d[0], d[0]) for d in data]
+    # 🔥 英語に完全統一（ここ重要）
+    labels = [category_map.get(d[0], "Other") for d in data]
     values = [d[1] for d in data]
 
     plt.figure(figsize=(6,6))
-    plt.pie(values, labels=labels, autopct="%1.1f%%")
+
+    # 🔥 崩れない設定
+    plt.pie(
+        values,
+        labels=labels,
+        autopct="%1.1f%%",
+        startangle=90
+    )
+
+    plt.axis('equal')  # 円をきれいに
 
     img = io.BytesIO()
-    plt.savefig(img, format="png")
+    plt.savefig(img, format="png", bbox_inches="tight")  # ←重要
     plt.close()
     img.seek(0)
 
