@@ -34,14 +34,11 @@ import psycopg2
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 
-# 🔥 日本語→英語変換（完全固定）
-category_map = {
-    "食費": "Food",
-    "交通費": "Transport",
-    "娯楽": "Fun",
-    "その他": "Other"
-}
+# 🔥 日本語フォント読み込み
+font_path = "ipaexg.ttf"
+font_prop = fm.FontProperties(fname=font_path)
 
 # ======================
 # 初期化
@@ -165,28 +162,11 @@ def get_month_total(user_id):
     conn.close()
     return total
 
-def set_budget(user_id, amount):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO budgets (user_id, monthly_budget)
-        VALUES (%s, %s)
-        ON CONFLICT (user_id)
-        DO UPDATE SET monthly_budget = %s
-    """, (user_id, amount, amount))
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
 def get_budget(user_id):
     conn = get_conn()
     cur = conn.cursor()
-
     cur.execute("SELECT monthly_budget FROM budgets WHERE user_id=%s", (user_id,))
     r = cur.fetchone()
-
     cur.close()
     conn.close()
     return r[0] if r else None
@@ -211,7 +191,7 @@ def send_category_menu(reply_token):
     line_bot_api.reply_message(reply_token, message)
 
 # =========================================================
-# 🔥 グラフ（完全修正版）
+# 🔥 グラフ（日本語完全対応）
 # =========================================================
 @app.route("/chart/<user_id>")
 def chart(user_id):
@@ -232,24 +212,23 @@ def chart(user_id):
     if not data:
         return Response("no data", status=404)
 
-    # 🔥 英語に完全統一（ここ重要）
-    labels = [category_map.get(d[0], "Other") for d in data]
+    labels = [d[0] for d in data]  # 日本語そのまま
     values = [d[1] for d in data]
 
     plt.figure(figsize=(6,6))
 
-    # 🔥 崩れない設定
     plt.pie(
         values,
         labels=labels,
         autopct="%1.1f%%",
-        startangle=90
+        startangle=90,
+        textprops={"fontproperties": font_prop}  # 🔥 これが重要
     )
 
-    plt.axis('equal')  # 円をきれいに
+    plt.axis('equal')
 
     img = io.BytesIO()
-    plt.savefig(img, format="png", bbox_inches="tight")  # ←重要
+    plt.savefig(img, format="png", bbox_inches="tight")
     plt.close()
     img.seek(0)
 
@@ -280,8 +259,6 @@ def handle_message(event):
     user_id = event.source.user_id
 
     try:
-        print("入力:", text)
-
         # 取り消し
         if text == "取り消し":
             conn = get_conn()
@@ -307,15 +284,6 @@ def handle_message(event):
             )
             return
 
-        # キャンセル
-        if text == "キャンセル":
-            clear_state(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("キャンセルしました")
-            )
-            return
-
         # 家計簿
         if text == "家計簿":
             set_state(user_id, "category")
@@ -337,14 +305,7 @@ def handle_message(event):
         # 今月
         if text == "今月":
             total = get_month_total(user_id)
-            budget = get_budget(user_id)
-
-            if budget:
-                remain = budget - total
-                msg = f"今月：{total}円\n残り：{remain}円"
-            else:
-                msg = f"今月：{total}円\n※予算未設定"
-
+            msg = f"今月：{total}円"
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(msg)
@@ -375,7 +336,6 @@ def handle_message(event):
 
                 if match:
                     amount = int(match.group(1))
-
                     save_expense(user_id, amount, category)
                     clear_state(user_id)
 
@@ -390,7 +350,7 @@ def handle_message(event):
                     )
                 return
 
-        # フォールバック
+        # fallback
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage("『家計簿』と送ると入力できるよ")
