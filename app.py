@@ -12,7 +12,7 @@ from linebot.models import (
     ImageSendMessage,
     TemplateSendMessage, ButtonsTemplate,
     MessageAction,
-    FlexSendMessage  # ←追加
+    FlexSendMessage
 )
 
 # ======================
@@ -88,13 +88,6 @@ def init_db():
         )
     """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS budgets (
-            user_id TEXT PRIMARY KEY,
-            monthly_budget INTEGER
-        )
-    """)
-
     conn.commit()
     cur.close()
     conn.close()
@@ -148,57 +141,6 @@ def save_expense(user_id, amount, category):
     cur.close()
     conn.close()
 
-def get_month_total(user_id):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT COALESCE(SUM(amount),0)
-        FROM expenses
-        WHERE user_id=%s
-        AND DATE_TRUNC('month', created_at)=DATE_TRUNC('month', CURRENT_DATE)
-    """, (user_id,))
-    total = cur.fetchone()[0]
-    cur.close()
-    conn.close()
-    return total
-
-def set_budget(user_id, amount):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO budgets (user_id, monthly_budget)
-        VALUES (%s, %s)
-        ON CONFLICT (user_id)
-        DO UPDATE SET monthly_budget=%s
-    """, (user_id, amount, amount))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def get_budget(user_id):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT monthly_budget FROM budgets WHERE user_id=%s", (user_id,))
-    r = cur.fetchone()
-    cur.close()
-    conn.close()
-    return r[0] if r else None
-
-def get_recent_expenses(user_id, limit=10):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, category, amount
-        FROM expenses
-        WHERE user_id=%s
-        ORDER BY created_at DESC
-        LIMIT %s
-    """, (user_id, limit))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
-
 # ======================
 # UI
 # ======================
@@ -218,7 +160,9 @@ def send_category_menu(reply_token):
     )
     line_bot_api.reply_message(reply_token, message)
 
-# 🔥 Flex 金額ボタン
+# ======================
+# Flex 金額ボタン
+# ======================
 def send_amount_flex(reply_token, category):
 
     bubble = {
@@ -265,6 +209,26 @@ def send_amount_flex(reply_token, category):
     )
 
 # ======================
+# Webhook（超重要）
+# ======================
+@app.route("/callback", methods=["POST"])
+def callback():
+    body = request.get_data(as_text=True)
+    signature = request.headers.get("X-Line-Signature")
+
+    try:
+        handler.handle(body, signature)
+    except:
+        print(traceback.format_exc())
+
+    return "OK"
+
+# 動作確認用
+@app.route("/")
+def home():
+    return "OK"
+
+# ======================
 # メイン処理
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
@@ -275,13 +239,11 @@ def handle_message(event):
     state = get_state(user_id)
 
     try:
-        # 家計簿スタート
         if text == "家計簿":
             set_state(user_id, "category")
             send_category_menu(event.reply_token)
             return
 
-        # 🔥 カテゴリ選択
         if state and state[0] == "category":
             text = category_alias.get(text, text)
 
@@ -290,12 +252,9 @@ def handle_message(event):
                 return
 
             set_state(user_id, "amount", text)
-
-            # 🔥 Flex表示
             send_amount_flex(event.reply_token, text)
             return
 
-        # 🔥 手入力
         if text == "手入力":
             line_bot_api.reply_message(
                 event.reply_token,
@@ -303,7 +262,6 @@ def handle_message(event):
             )
             return
 
-        # 金額入力
         if state and state[0] == "amount":
             match = re.search(r'(\d+)', text)
             if match:
@@ -319,7 +277,6 @@ def handle_message(event):
                 )
                 return
 
-        # fallback
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage("『家計簿』って送ってね")
@@ -327,3 +284,9 @@ def handle_message(event):
 
     except:
         print(traceback.format_exc())
+
+# ======================
+# 起動
+# ======================
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
