@@ -34,9 +34,8 @@ import psycopg2
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
 
-# 👇 日本語フォント対策（超重要）
+# 🔥 日本語回避（文字化け防止）
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
 # ======================
@@ -57,7 +56,12 @@ handler = WebhookHandler(CHANNEL_SECRET)
 # ======================
 user_states = {}
 
-# 有効カテゴリ
+# 内部キー（ズレ防止）
+CMD_INPUT = "START_INPUT"
+CMD_GRAPH = "SHOW_GRAPH"
+CMD_MONTH = "SHOW_MONTH"
+CMD_DELETE = "DELETE_LAST"
+
 valid_categories = ["食費", "交通費", "光熱費", "通信費", "娯楽", "その他"]
 
 # =========================================================
@@ -103,6 +107,24 @@ def save_expense(user_id, amount, category):
         "INSERT INTO expenses (user_id, amount, category) VALUES (%s,%s,%s)",
         (user_id, amount, category)
     )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def delete_last(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM expenses
+        WHERE id = (
+            SELECT id FROM expenses
+            WHERE user_id=%s
+            ORDER BY created_at DESC
+            LIMIT 1
+        )
+    """, (user_id,))
+
     conn.commit()
     cur.close()
     conn.close()
@@ -171,6 +193,48 @@ def send_category_menu(reply_token):
     line_bot_api.reply_message(reply_token, message)
 
 # =========================================================
+# 🔥 リッチメニュー（ズレ防止版）
+# =========================================================
+def create_rich_menu():
+    return RichMenu(
+        size=RichMenuSize(width=2500, height=1686),
+        selected=True,
+        name="menu",
+        chat_bar_text="メニュー",
+        areas=[
+            RichMenuArea(
+                bounds=RichMenuBounds(x=0, y=0, width=1250, height=843),
+                action=MessageAction(label="支出入力", text=CMD_INPUT)
+            ),
+            RichMenuArea(
+                bounds=RichMenuBounds(x=1250, y=0, width=1250, height=843),
+                action=MessageAction(label="グラフ", text=CMD_GRAPH)
+            ),
+            RichMenuArea(
+                bounds=RichMenuBounds(x=0, y=843, width=1250, height=843),
+                action=MessageAction(label="今月", text=CMD_MONTH)
+            ),
+            RichMenuArea(
+                bounds=RichMenuBounds(x=1250, y=843, width=1250, height=843),
+                action=MessageAction(label="取り消し", text=CMD_DELETE)
+            ),
+        ]
+    )
+
+def setup_rich_menu():
+    try:
+        rich_menu = create_rich_menu()
+        rich_menu_id = line_bot_api.create_rich_menu(rich_menu)
+
+        with open("menu.jpg", "rb") as f:
+            line_bot_api.set_rich_menu_image(rich_menu_id, "image/jpeg", f)
+
+        line_bot_api.set_default_rich_menu(rich_menu_id)
+        return rich_menu_id
+    except:
+        print(traceback.format_exc())
+
+# =========================================================
 # グラフ
 # =========================================================
 @app.route("/chart/<user_id>")
@@ -192,7 +256,8 @@ def chart(user_id):
     if not data:
         return Response("no data", status=404)
 
-    labels = [d[0] for d in data]
+    # 🔥 文字化け回避
+    labels = [str(d[0]) for d in data]
     values = [d[1] for d in data]
 
     plt.figure(figsize=(6,6))
@@ -221,7 +286,7 @@ def callback():
     return "OK"
 
 # =========================================================
-# メイン処理（🔥完成版）
+# メイン処理
 # =========================================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -230,72 +295,41 @@ def handle_message(event):
     user_id = event.source.user_id
 
     try:
-        # 🔥 デバッグ
         print("入力:", text)
         print("状態:", user_states.get(user_id))
 
         # ======================
-        # キャンセル（最優先）
+        # コマンド
         # ======================
-        if text == "キャンセル":
+        if text == CMD_INPUT:
             user_states.pop(user_id, None)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("入力をキャンセルしました")
-            )
-            return
-
-        # ======================
-        # コマンド（状態より優先）
-        # ======================
-        if text == "家計簿":
-            user_states.pop(user_id, None)  # ←強制リセット
             user_states[user_id] = {"step": "category"}
             send_category_menu(event.reply_token)
             return
 
-        if text == "グラフ":
+        if text == CMD_GRAPH:
             url = f"{BASE_URL}/chart/{user_id}"
             line_bot_api.reply_message(
                 event.reply_token,
-                ImageSendMessage(
-                    original_content_url=url,
-                    preview_image_url=url
-                )
+                ImageSendMessage(url, url)
             )
             return
 
-        if text == "今月":
+        if text == CMD_MONTH:
             total = get_month_total(user_id)
             budget = get_budget(user_id)
-
+            msg = f"今月：{total}円"
             if budget:
-                remain = budget - total
-                msg = f"今月：{total}円\n残り：{remain}円"
-            else:
-                msg = f"今月：{total}円\n※予算未設定"
-
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(msg)
-            )
+                msg += f"\n残り：{budget-total}円"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
             return
 
-        if text.startswith("予算"):
-            match = re.search(r'(\d+)', text)
-            if match:
-                amount = int(match.group(1))
-                set_budget(user_id, amount)
-
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(f"予算：{amount}円に設定しました")
-                )
-            else:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage("例：予算 50000")
-                )
+        if text == CMD_DELETE:
+            delete_last(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage("削除OK")
+            )
             return
 
         # ======================
@@ -303,7 +337,6 @@ def handle_message(event):
         # ======================
         if user_id in user_states:
 
-            # カテゴリ選択
             if user_states[user_id]["step"] == "category":
 
                 if text not in valid_categories:
@@ -321,7 +354,6 @@ def handle_message(event):
                 )
                 return
 
-            # 金額入力
             if user_states[user_id]["step"] == "amount":
 
                 match = re.search(r'(\d+)', text)
@@ -335,21 +367,19 @@ def handle_message(event):
 
                     line_bot_api.reply_message(
                         event.reply_token,
-                        TextSendMessage(f"{category}：{amount}円 登録完了✅")
+                        TextSendMessage(f"{category}：{amount}円 登録完了")
                     )
                 else:
                     line_bot_api.reply_message(
                         event.reply_token,
-                        TextSendMessage("数字で入力してね（例: 500）")
+                        TextSendMessage("数字で入力してね")
                     )
                 return
 
-        # ======================
-        # フォールバック
-        # ======================
+        # fallback
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage("『家計簿』と送ると入力スタートできるよ！")
+            TextSendMessage("メニューから操作してね")
         )
 
     except:
