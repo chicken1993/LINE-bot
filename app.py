@@ -35,6 +35,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# 🔥 日本語→英語変換（これが今回の本体）
+category_map = {
+    "食費": "Food",
+    "交通費": "Transport",
+    "娯楽": "Fun",
+    "その他": "Other"
+}
+
 # ======================
 # 初期化
 # ======================
@@ -95,7 +103,7 @@ def init_db():
 init_db()
 
 # =========================================================
-# 状態管理（DB）
+# 状態管理
 # =========================================================
 def set_state(user_id, step, category=None):
     conn = get_conn()
@@ -184,7 +192,7 @@ def get_budget(user_id):
     return r[0] if r else None
 
 # =========================================================
-# 🔥 カテゴリUI（4個制限対応）
+# UI
 # =========================================================
 def send_category_menu(reply_token):
     message = TemplateSendMessage(
@@ -203,7 +211,7 @@ def send_category_menu(reply_token):
     line_bot_api.reply_message(reply_token, message)
 
 # =========================================================
-# グラフ
+# グラフ（🔥ここが修正ポイント）
 # =========================================================
 @app.route("/chart/<user_id>")
 def chart(user_id):
@@ -224,7 +232,8 @@ def chart(user_id):
     if not data:
         return Response("no data", status=404)
 
-    labels = [str(d[0]) for d in data]
+    # 🔥 日本語→英語変換
+    labels = [category_map.get(d[0], d[0]) for d in data]
     values = [d[1] for d in data]
 
     plt.figure(figsize=(6,6))
@@ -264,7 +273,7 @@ def handle_message(event):
     try:
         print("入力:", text)
 
-        # 🔥 取り消し（DB削除）
+        # 取り消し
         if text == "取り消し":
             conn = get_conn()
             cur = conn.cursor()
@@ -298,7 +307,7 @@ def handle_message(event):
             )
             return
 
-        # 家計簿開始
+        # 家計簿
         if text == "家計簿":
             set_state(user_id, "category")
             send_category_menu(event.reply_token)
@@ -340,7 +349,6 @@ def handle_message(event):
             step, category = state
 
             if step == "category":
-
                 if text not in valid_categories:
                     send_category_menu(event.reply_token)
                     return
