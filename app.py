@@ -36,38 +36,7 @@ line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
-# ★AI自動分類（追加）
-# ======================
-def auto_category(text):
-
-    text = text.lower()
-
-    rules = {
-        "食費": [
-            "コンビニ", "スタバ", "マック", "カフェ", "ラーメン",
-            "寿司", "ごはん", "飯", "ランチ", "ディナー", "弁当", "外食"
-        ],
-        "交通費": [
-            "電車", "バス", "タクシー", "suica", "pasmo", "駅", "乗車"
-        ],
-        "娯楽": [
-            "ゲーム", "映画", "youtube", "アニメ", "課金",
-            "ガチャ", "netflix", "ネトフリ", "動画"
-        ],
-        "日用品": [
-            "洗剤", "ティッシュ", "トイレットペーパー", "シャンプー"
-        ],
-    }
-
-    for category, keywords in rules.items():
-        for kw in keywords:
-            if kw in text:
-                return category
-
-    return "その他"
-
-# ======================
-# DBプール
+# DBプール（重要）
 # ======================
 pool = SimpleConnectionPool(
     1, 10,
@@ -82,7 +51,7 @@ def put_conn(conn):
     pool.putconn(conn)
 
 # ======================
-# フォント
+# フォント（安全版）
 # ======================
 try:
     font_prop = fm.FontProperties(fname="ipaexg.ttf")
@@ -329,7 +298,7 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
             return
 
-        # ===== 削除 =====
+        # ===== 削除メニュー =====
         if text in ["削除", "取り消し"]:
             message = TemplateSendMessage(
                 alt_text="削除メニュー",
@@ -346,14 +315,130 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, message)
             return
 
-        # ===== カテゴリ入力モード =====
+        # ===== 履歴削除 =====
+        if text == "履歴削除":
+            data = get_recent_expenses(user_id)
+            if not data:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage("データなし"))
+                return
+
+            contents = []
+            for d in data:
+                contents.append({
+                    "type": "button",
+                    "action": {
+                        "type": "message",
+                        "label": f"{d[1]} {d[2]}円",
+                        "text": f"削除_{d[0]}"
+                    }
+                })
+
+            bubble = {
+                "type": "bubble",
+                "body": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {"type": "text", "text": "履歴削除", "weight": "bold"}
+                    ]
+                },
+                "footer": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": contents
+                }
+            }
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                FlexSendMessage(alt_text="履歴削除", contents=bubble)
+            )
+            return
+
+        # ===== 削除実行 =====
+        if text.startswith("削除_"):
+            delete_id = text.replace("削除_", "")
+
+            conn = get_conn()
+            cur = conn.cursor()
+
+            cur.execute("DELETE FROM expenses WHERE id=%s", (delete_id,))
+
+            conn.commit()
+            cur.close()
+            put_conn(conn)
+
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("削除完了"))
+            return
+
+        # ===== 直前削除（安全版）=====
+        if text == "直前削除":
+            conn = get_conn()
+            cur = conn.cursor()
+
+            cur.execute("""
+                DELETE FROM expenses
+                WHERE id IN (
+                    SELECT id FROM expenses
+                    WHERE user_id=%s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                )
+            """, (user_id,))
+
+            conn.commit()
+            cur.close()
+            put_conn(conn)
+
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("削除OK"))
+            return
+
+        # ===== 全削除 =====
+        if text == "全削除":
+            conn = get_conn()
+            cur = conn.cursor()
+
+            cur.execute("DELETE FROM expenses WHERE user_id=%s", (user_id,))
+
+            conn.commit()
+            cur.close()
+            put_conn(conn)
+
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("全削除"))
+            return
+
+        # ===== 入力開始 =====
+        if text in ["家計簿", "支出入力"]:
+            set_state(user_id, "category")
+
+            message = TemplateSendMessage(
+                alt_text="カテゴリ",
+                template=ButtonsTemplate(
+                    title="支出",
+                    text="カテゴリ",
+                    actions=[
+                        MessageAction(label="食費", text="食費"),
+                        MessageAction(label="交通費", text="交通費"),
+                        MessageAction(label="娯楽", text="娯楽"),
+                        MessageAction(label="その他", text="その他"),
+                    ]
+                )
+            )
+            line_bot_api.reply_message(event.reply_token, message)
+            return
+
+        # ===== カテゴリ =====
+        if state and state[0] == "category":
+            set_state(user_id, "amount", text)
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(f"{text}いくら？"))
+            return
+
+        # ===== 金額 =====
         if state and state[0] == "amount":
             match = re.search(r'(\d+)', text)
             if match:
                 amount = int(match.group(1))
-
-                # ★ここがAI分類
-                category = auto_category(text)
+                category = state[1]
 
                 save_expense(user_id, amount, category)
                 clear_state(user_id)
