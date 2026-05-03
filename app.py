@@ -47,14 +47,6 @@ def put_conn(conn):
     pool.putconn(conn)
 
 # ======================
-# フォント
-# ======================
-try:
-    font_prop = fm.FontProperties(fname="ipaexg.ttf")
-except:
-    font_prop = None
-
-# ======================
 # DB初期化
 # ======================
 def init_db():
@@ -209,7 +201,7 @@ def handle_message(event):
 
     try:
 
-        # ===== 今月（★完全安定版に差し替え済み）=====
+        # ===== 今月（完全安定UI版）=====
         if text in ["今月", "今月合計"]:
 
             total = get_month_total(user_id)
@@ -249,7 +241,6 @@ def handle_message(event):
         # ===== 上限金額変更 =====
         if text == "上限金額変更":
             set_state(user_id, "budget")
-
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage("月の上限金額を入力してね（例：50000）")
@@ -287,7 +278,10 @@ def handle_message(event):
         # ===== カテゴリ =====
         if state and state[0] == "category":
             set_state(user_id, "amount", text)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(f"{text}いくら？"))
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(f"{text}いくら？")
+            )
             return
 
         # ===== 金額 =====
@@ -306,11 +300,17 @@ def handle_message(event):
                 )
                 return
 
-        line_bot_api.reply_message(event.reply_token, TextSendMessage("メニューから選んで"))
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage("メニューから選んで")
+        )
 
     except:
         print(traceback.format_exc())
-        line_bot_api.reply_message(event.reply_token, TextSendMessage("エラー"))
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage("エラー")
+        )
 
 # ======================
 # 起動
