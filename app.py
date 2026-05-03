@@ -1,14 +1,25 @@
 # ======================
 # Flask
 # ======================
-from flask import Flask, request, send_file
-import os, re, io, traceback
+from flask import Flask, request, Response
 
 # ======================
-# LINE
+# LINE Bot SDK
 # ======================
 from linebot import LineBotApi, WebhookHandler
-from linebot.models import *
+from linebot.models import (
+    MessageEvent, TextMessage, TextSendMessage,
+    ImageSendMessage,
+    TemplateSendMessage, ButtonsTemplate,
+    MessageAction,
+    FlexSendMessage
+)
+
+# ======================
+# 基本
+# ======================
+import os, re, io, traceback
+from dotenv import load_dotenv
 
 # ======================
 # DB
@@ -16,34 +27,37 @@ from linebot.models import *
 import psycopg2
 
 # ======================
-# Graph
+# グラフ
 # ======================
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+
+font_prop = fm.FontProperties(fname="ipaexg.ttf")
 
 # ======================
-# Scheduler
+# 初期化
 # ======================
-from apscheduler.schedulers.background import BackgroundScheduler
-
-# ======================
-# INIT
-# ======================
+load_dotenv()
 app = Flask(__name__)
 
-line_bot_api = LineBotApi(os.getenv("CHANNEL_ACCESS_TOKEN"))
-handler = WebhookHandler(os.getenv("CHANNEL_SECRET"))
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
 BASE_URL = os.getenv("BASE_URL")
 
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
-# DB
+# DB接続
 # ======================
 def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
-
+# ======================
+# DB初期化
+# ======================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
@@ -73,107 +87,74 @@ def init_db():
         )
     """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS category_budgets (
-            user_id TEXT,
-            category TEXT,
-            budget INTEGER,
-            PRIMARY KEY (user_id, category)
-        )
-    """)
-
     conn.commit()
     cur.close()
     conn.close()
 
 init_db()
 
-
 # ======================
-# STATE
+# 状態管理
 # ======================
-def set_state(uid, step, cat=None):
+def set_state(user_id, step, category=None):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO user_states VALUES (%s,%s,%s)
+        INSERT INTO user_states (user_id, step, category)
+        VALUES (%s, %s, %s)
         ON CONFLICT (user_id)
         DO UPDATE SET step=%s, category=%s
-    """, (uid, step, cat, step, cat))
+    """, (user_id, step, category, step, category))
     conn.commit()
     cur.close()
     conn.close()
 
-
-def get_state(uid):
+def get_state(user_id):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT step, category FROM user_states WHERE user_id=%s", (uid,))
+    cur.execute("SELECT step, category FROM user_states WHERE user_id=%s", (user_id,))
     r = cur.fetchone()
     cur.close()
     conn.close()
     return r
 
-
-def clear_state(uid):
+def clear_state(user_id):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("DELETE FROM user_states WHERE user_id=%s", (uid,))
+    cur.execute("DELETE FROM user_states WHERE user_id=%s", (user_id,))
     conn.commit()
     cur.close()
     conn.close()
 
-
 # ======================
-# SAFE NUMBER（重要）
+# 支出DB
 # ======================
-def safe_amount(text):
-    m = re.search(r'\d+', text)
-    if not m:
-        return None
-    return int(m.group())
-
-
-# ======================
-# EXPENSE
-# ======================
-def save_expense(uid, amount, cat):
+def save_expense(user_id, amount, category):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO expenses (user_id, amount, category) VALUES (%s,%s,%s)",
-        (uid, amount, cat)
+        (user_id, amount, category)
     )
     conn.commit()
     cur.close()
     conn.close()
 
-
-def get_month_total(uid):
+def get_month_total(user_id):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT COALESCE(SUM(amount),0)
         FROM expenses
         WHERE user_id=%s
-    """, (uid,))
-    r = cur.fetchone()[0]
+        AND DATE_TRUNC('month', created_at)=DATE_TRUNC('month', CURRENT_DATE)
+    """, (user_id,))
+    total = cur.fetchone()[0]
     cur.close()
     conn.close()
-    return r
+    return total
 
-
-def get_budget(uid):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT monthly_budget FROM budgets WHERE user_id=%s", (uid,))
-    r = cur.fetchone()
-    cur.close()
-    conn.close()
-    return r[0] if r else None
-
-
-def get_recent(uid):
+def get_recent_expenses(user_id, limit=10):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -181,63 +162,51 @@ def get_recent(uid):
         FROM expenses
         WHERE user_id=%s
         ORDER BY created_at DESC
-        LIMIT 10
-    """, (uid,))
-    r = cur.fetchall()
+        LIMIT %s
+    """, (user_id, limit))
+    rows = cur.fetchall()
     cur.close()
     conn.close()
-    return r
-
-
-# ======================
-# WARNING
-# ======================
-def check_budget_warning(uid):
-    total = get_month_total(uid)
-    budget = get_budget(uid)
-
-    if budget and total >= budget * 0.8:
-        line_bot_api.push_message(
-            uid,
-            TextSendMessage(f"⚠️ 予算80%超え\n{total}/{budget}")
-        )
-
+    return rows
 
 # ======================
-# MONTH REPORT
+# 💰 予算機能
 # ======================
-def monthly_report():
+def set_budget(user_id, amount):
     conn = get_conn()
     cur = conn.cursor()
-
-    cur.execute("SELECT DISTINCT user_id FROM expenses")
-    users = cur.fetchall()
-
-    for (uid,) in users:
-        total = get_month_total(uid)
-        budget = get_budget(uid)
-
-        msg = f"📊 月次レポート\n{total}円"
-
-        if budget:
-            msg += f"\n達成率 {int(total/budget*100)}%"
-
-        line_bot_api.push_message(uid, TextSendMessage(msg))
-
+    cur.execute("""
+        INSERT INTO budgets (user_id, monthly_budget)
+        VALUES (%s, %s)
+        ON CONFLICT (user_id)
+        DO UPDATE SET monthly_budget=%s
+    """, (user_id, amount, amount))
+    conn.commit()
     cur.close()
     conn.close()
 
+def get_budget(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT monthly_budget FROM budgets WHERE user_id=%s", (user_id,))
+    r = cur.fetchone()
+    cur.close()
+    conn.close()
+    return r[0] if r else None
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(monthly_report, "cron", hour=20, minute=0)
-scheduler.start()
-
+def delete_budget(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM budgets WHERE user_id=%s", (user_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
 
 # ======================
-# CHART
+# グラフ
 # ======================
-@app.route("/chart/<uid>")
-def chart(uid):
+@app.route("/chart/<user_id>")
+def chart(user_id):
 
     conn = get_conn()
     cur = conn.cursor()
@@ -246,119 +215,157 @@ def chart(uid):
         FROM expenses
         WHERE user_id=%s
         GROUP BY category
-    """, (uid,))
+    """, (user_id,))
     data = cur.fetchall()
     cur.close()
     conn.close()
 
+    plt.figure(figsize=(6,6))
+
     if not data:
-        return "no data"
+        plt.text(0.5, 0.5, "データなし", ha='center')
+    else:
+        labels = [d[0] for d in data]
+        values = [d[1] for d in data]
+        plt.pie(values, labels=labels, autopct="%1.1f%%",
+                textprops={"fontproperties": font_prop})
 
-    labels = [d[0] for d in data]
-    values = [d[1] for d in data]
+    plt.axis('equal')
 
-    plt.figure()
-    plt.bar(labels, values)
+    img = io.BytesIO()
+    plt.savefig(img, format="png")
+    plt.close()
+    img.seek(0)
 
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png")
-    buf.seek(0)
-
-    return send_file(buf, mimetype="image/png")
-
+    return Response(img.getvalue(), mimetype="image/png")
 
 # ======================
-# WEBHOOK
+# Webhook
 # ======================
 @app.route("/callback", methods=["POST"])
 def callback():
     body = request.get_data(as_text=True)
-    sig = request.headers.get("X-Line-Signature")
+    signature = request.headers.get("X-Line-Signature")
 
     try:
-        handler.handle(body, sig)
+        handler.handle(body, signature)
     except:
         print(traceback.format_exc())
 
     return "OK"
 
-
 @app.route("/")
 def home():
     return "OK"
 
-
 # ======================
-# MAIN
+# メイン処理
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
-def handle(event):
+def handle_message(event):
 
-    text = event.message.text
-    uid = event.source.user_id
-    state = get_state(uid)
+    text = event.message.text.strip().replace(" ", "").replace("　", "")
+    user_id = event.source.user_id
+    state = get_state(user_id)
 
     try:
 
-        # ===== 支出開始 =====
-        if text == "支出":
-            set_state(uid, "cat")
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("カテゴリ"))
-            return
+        # ======================
+        # 📊 今月
+        # ======================
+        if text in ["今月", "今月合計"]:
+            total = get_month_total(user_id)
+            budget = get_budget(user_id)
 
-        if state and state[0] == "cat":
-            set_state(uid, "amount", text)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("金額"))
-            return
-
-        if state and state[0] == "amount":
-
-            amount = safe_amount(text)
-
-            if amount is None:
-                line_bot_api.reply_message(event.reply_token, TextSendMessage("数字入れて"))
-                return
-
-            cat = state[1]
-
-            save_expense(uid, amount, cat)
-            check_budget_warning(uid)
-            clear_state(uid)
-
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("OK"))
-            return
-
-        # ===== 今月 =====
-        if text == "今月":
-            total = get_month_total(uid)
-            budget = get_budget(uid)
-
-            msg = f"{total}円"
+            msg = f"今月：{total}円"
 
             if budget:
-                msg += f"\n残り {budget-total}"
+                msg += f"\n予算：{budget}円"
+                msg += f"\n残り：{budget - total}円"
+            else:
+                msg += "\n※予算未設定"
 
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
+            message = TemplateSendMessage(
+                alt_text="今月メニュー",
+                template=ButtonsTemplate(
+                    title="今月データ",
+                    text=msg,
+                    actions=[
+                        MessageAction(label="✏️予算変更", text="予算設定"),
+                        MessageAction(label="🗑予算削除", text="予算削除")
+                    ]
+                )
+            )
+
+            line_bot_api.reply_message(event.reply_token, message)
             return
 
-        # ===== グラフ =====
-        if text == "グラフ":
-            url = f"{BASE_URL}/chart/{uid}"
+        # ======================
+        # 💰 予算設定開始
+        # ======================
+        if text == "予算設定":
+            set_state(user_id, "budget_input")
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage("新しい予算いくら？（数字だけ）")
+            )
+            return
+
+        # ======================
+        # 💰 予算入力
+        # ======================
+        if state and state[0] == "budget_input":
+            match = re.search(r'(\d+)', text)
+            if match:
+                amount = int(match.group(1))
+                set_budget(user_id, amount)
+                clear_state(user_id)
+
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(f"予算を{amount}円に設定したよ✅")
+                )
+                return
+
+        # ======================
+        # 🗑 予算削除
+        # ======================
+        if text == "予算削除":
+            delete_budget(user_id)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage("予算削除したよ🗑")
+            )
+            return
+
+        # ======================
+        # グラフ
+        # ======================
+        if text in ["グラフ", "グラフ📊"]:
+            url = f"{BASE_URL}/chart/{user_id}"
             line_bot_api.reply_message(
                 event.reply_token,
                 ImageSendMessage(url, url)
             )
             return
 
-        line_bot_api.reply_message(event.reply_token, TextSendMessage("メニュー"))
+        # ======================
+        # fallback
+        # ======================
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage("メニューから選んでね👇")
+        )
 
     except:
         print(traceback.format_exc())
-        line_bot_api.reply_message(event.reply_token, TextSendMessage("エラー"))
-
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage("エラー出た😇")
+        )
 
 # ======================
-# RUN
+# 起動
 # ======================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
