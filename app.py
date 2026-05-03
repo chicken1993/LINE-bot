@@ -1,7 +1,8 @@
 # ======================
 # Flask
 # ======================
-from flask import Flask, request, Response, send_file
+from flask import Flask, request, send_file
+import os, re, io, traceback
 
 # ======================
 # LINE
@@ -10,23 +11,31 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.models import *
 
 # ======================
-import os, re, traceback, io
-from dotenv import load_dotenv
-
+# DB
+# ======================
 import psycopg2
 
+# ======================
+# Graph
+# ======================
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # ======================
-load_dotenv()
+# Scheduler
+# ======================
+from apscheduler.schedulers.background import BackgroundScheduler
 
+# ======================
+# INIT
+# ======================
 app = Flask(__name__)
 
 line_bot_api = LineBotApi(os.getenv("CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("CHANNEL_SECRET"))
 BASE_URL = os.getenv("BASE_URL")
+
 
 # ======================
 # DB
@@ -34,7 +43,7 @@ BASE_URL = os.getenv("BASE_URL")
 def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
-# ======================
+
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
@@ -57,11 +66,28 @@ def init_db():
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS budgets (
+            user_id TEXT PRIMARY KEY,
+            monthly_budget INTEGER
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS category_budgets (
+            user_id TEXT,
+            category TEXT,
+            budget INTEGER,
+            PRIMARY KEY (user_id, category)
+        )
+    """)
+
     conn.commit()
     cur.close()
     conn.close()
 
 init_db()
+
 
 # ======================
 # STATE
@@ -78,6 +104,7 @@ def set_state(uid, step, cat=None):
     cur.close()
     conn.close()
 
+
 def get_state(uid):
     conn = get_conn()
     cur = conn.cursor()
@@ -87,6 +114,7 @@ def get_state(uid):
     conn.close()
     return r
 
+
 def clear_state(uid):
     conn = get_conn()
     cur = conn.cursor()
@@ -95,8 +123,9 @@ def clear_state(uid):
     cur.close()
     conn.close()
 
+
 # ======================
-# SAFE NUMBER（重要修正）
+# SAFE NUMBER（重要）
 # ======================
 def safe_amount(text):
     m = re.search(r'\d+', text)
@@ -104,8 +133,9 @@ def safe_amount(text):
         return None
     return int(m.group())
 
+
 # ======================
-# SAVE
+# EXPENSE
 # ======================
 def save_expense(uid, amount, cat):
     conn = get_conn()
@@ -118,9 +148,7 @@ def save_expense(uid, amount, cat):
     cur.close()
     conn.close()
 
-# ======================
-# TOTAL
-# ======================
+
 def get_month_total(uid):
     conn = get_conn()
     cur = conn.cursor()
@@ -134,8 +162,79 @@ def get_month_total(uid):
     conn.close()
     return r
 
+
+def get_budget(uid):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT monthly_budget FROM budgets WHERE user_id=%s", (uid,))
+    r = cur.fetchone()
+    cur.close()
+    conn.close()
+    return r[0] if r else None
+
+
+def get_recent(uid):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, category, amount
+        FROM expenses
+        WHERE user_id=%s
+        ORDER BY created_at DESC
+        LIMIT 10
+    """, (uid,))
+    r = cur.fetchall()
+    cur.close()
+    conn.close()
+    return r
+
+
 # ======================
-# CHART（404修正ここ）
+# WARNING
+# ======================
+def check_budget_warning(uid):
+    total = get_month_total(uid)
+    budget = get_budget(uid)
+
+    if budget and total >= budget * 0.8:
+        line_bot_api.push_message(
+            uid,
+            TextSendMessage(f"⚠️ 予算80%超え\n{total}/{budget}")
+        )
+
+
+# ======================
+# MONTH REPORT
+# ======================
+def monthly_report():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("SELECT DISTINCT user_id FROM expenses")
+    users = cur.fetchall()
+
+    for (uid,) in users:
+        total = get_month_total(uid)
+        budget = get_budget(uid)
+
+        msg = f"📊 月次レポート\n{total}円"
+
+        if budget:
+            msg += f"\n達成率 {int(total/budget*100)}%"
+
+        line_bot_api.push_message(uid, TextSendMessage(msg))
+
+    cur.close()
+    conn.close()
+
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(monthly_report, "cron", hour=20, minute=0)
+scheduler.start()
+
+
+# ======================
+# CHART
 # ======================
 @app.route("/chart/<uid>")
 def chart(uid):
@@ -167,6 +266,7 @@ def chart(uid):
 
     return send_file(buf, mimetype="image/png")
 
+
 # ======================
 # WEBHOOK
 # ======================
@@ -182,12 +282,14 @@ def callback():
 
     return "OK"
 
+
 @app.route("/")
 def home():
     return "OK"
 
+
 # ======================
-# LINE MAIN
+# MAIN
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
 def handle(event):
@@ -198,13 +300,10 @@ def handle(event):
 
     try:
 
-        # ===== 支出 =====
+        # ===== 支出開始 =====
         if text == "支出":
             set_state(uid, "cat")
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("カテゴリ入力")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("カテゴリ"))
             return
 
         if state and state[0] == "cat":
@@ -216,23 +315,30 @@ def handle(event):
 
             amount = safe_amount(text)
 
-            # ❗ここが今回の修正ポイント
             if amount is None:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage("数字入れて")
-                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage("数字入れて"))
                 return
 
             cat = state[1]
 
             save_expense(uid, amount, cat)
+            check_budget_warning(uid)
             clear_state(uid)
 
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("OK")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("OK"))
+            return
+
+        # ===== 今月 =====
+        if text == "今月":
+            total = get_month_total(uid)
+            budget = get_budget(uid)
+
+            msg = f"{total}円"
+
+            if budget:
+                msg += f"\n残り {budget-total}"
+
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
             return
 
         # ===== グラフ =====
@@ -244,17 +350,15 @@ def handle(event):
             )
             return
 
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage("メニュー使って")
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage("メニュー"))
 
     except:
         print(traceback.format_exc())
         line_bot_api.reply_message(event.reply_token, TextSendMessage("エラー"))
 
+
 # ======================
-# RUN（gunicorn対応OK）
+# RUN
 # ======================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
