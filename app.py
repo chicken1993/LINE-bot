@@ -209,40 +209,41 @@ def handle_message(event):
 
     try:
 
-        # ===== 今月（★追加済み）=====
+        # ===== 今月（★完全安定版に差し替え済み）=====
         if text in ["今月", "今月合計"]:
 
             total = get_month_total(user_id)
             budget = get_budget(user_id)
 
-            if budget:
-                usage_rate = int((total / budget) * 100) if budget > 0 else 0
-                msg = (
-                    f"今月合計：{total}円\n"
-                    f"上限：{budget}円\n"
-                    f"使用金額：{total}円\n"
-                    f"使用率：{usage_rate}%"
-                )
+            if budget and budget > 0:
+                usage_rate = int((total / budget) * 100)
+                summary = f"今月:{total}円 上限:{budget}円 使用率:{usage_rate}%"
             else:
-                msg = (
-                    f"今月合計：{total}円\n"
-                    f"上限：未設定\n"
-                    f"使用金額：{total}円"
+                summary = f"今月:{total}円 上限:未設定"
+
+            try:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TemplateSendMessage(
+                        alt_text="今月メニュー",
+                        template=ButtonsTemplate(
+                            title="今月",
+                            text="今月の家計",
+                            actions=[
+                                MessageAction(label="上限金額変更", text="上限金額変更"),
+                                MessageAction(label="金額変更なし", text="金額変更なし")
+                            ]
+                        )
+                    )
                 )
 
-            message = TemplateSendMessage(
-                alt_text="今月メニュー",
-                template=ButtonsTemplate(
-                    title="今月",
-                    text=msg,
-                    actions=[
-                        MessageAction(label="上限金額変更", text="上限金額変更"),
-                        MessageAction(label="金額変更なし", text="金額変更なし")
-                    ]
+            except:
+                print(traceback.format_exc())
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(summary)
                 )
-            )
 
-            line_bot_api.reply_message(event.reply_token, message)
             return
 
         # ===== 上限金額変更 =====
@@ -282,9 +283,6 @@ def handle_message(event):
                     TextSendMessage(f"上限を{budget}円に設定したよ")
                 )
                 return
-
-        # ===== ここから下は既存処理（省略せずそのまま残してOK）=====
-        # ※あなたの元コードの「カテゴリ・金額・削除系」はここにそのまま残す
 
         # ===== カテゴリ =====
         if state and state[0] == "category":
