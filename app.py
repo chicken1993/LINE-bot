@@ -49,6 +49,9 @@ BASE_URL = os.getenv("BASE_URL")
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
+# 一時保存（履歴削除）
+user_temp_data = {}
+
 # ======================
 # DB接続
 # ======================
@@ -127,7 +130,7 @@ def clear_state(user_id):
     conn.close()
 
 # ======================
-# 支出DB
+# DB処理
 # ======================
 def save_expense(user_id, amount, category):
     conn = get_conn()
@@ -154,6 +157,15 @@ def get_month_total(user_id):
     conn.close()
     return total
 
+def get_budget(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT monthly_budget FROM budgets WHERE user_id=%s", (user_id,))
+    r = cur.fetchone()
+    cur.close()
+    conn.close()
+    return r[0] if r else None
+
 def get_recent_expenses(user_id, limit=10):
     conn = get_conn()
     cur = conn.cursor()
@@ -170,37 +182,34 @@ def get_recent_expenses(user_id, limit=10):
     return rows
 
 # ======================
-# 💰 予算機能
+# 履歴Flex
 # ======================
-def set_budget(user_id, amount):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO budgets (user_id, monthly_budget)
-        VALUES (%s, %s)
-        ON CONFLICT (user_id)
-        DO UPDATE SET monthly_budget=%s
-    """, (user_id, amount, amount))
-    conn.commit()
-    cur.close()
-    conn.close()
+def send_history_flex(reply_token, data):
+    contents = []
+    for d in data:
+        contents.append({
+            "type": "button",
+            "action": {
+                "type": "message",
+                "label": f"{d[1]} {d[2]}円",
+                "text": f"削除_{d[0]}"
+            }
+        })
 
-def get_budget(user_id):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT monthly_budget FROM budgets WHERE user_id=%s", (user_id,))
-    r = cur.fetchone()
-    cur.close()
-    conn.close()
-    return r[0] if r else None
+    bubble = {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {"type": "text", "text": "履歴削除", "weight": "bold", "size": "lg"},
+                {"type": "text", "text": "削除する項目を選択👇", "size": "sm"}
+            ]
+        },
+        "footer": {"type": "box", "layout": "vertical", "contents": contents}
+    }
 
-def delete_budget(user_id):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM budgets WHERE user_id=%s", (user_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    line_bot_api.reply_message(reply_token, FlexSendMessage(alt_text="履歴削除", contents=bubble))
 
 # ======================
 # グラフ
@@ -264,105 +273,151 @@ def home():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
 
-    text = event.message.text.strip().replace(" ", "").replace("　", "")
+    text = event.message.text.strip()
+    text = text.replace(" ", "").replace("　", "")
+
     user_id = event.source.user_id
     state = get_state(user_id)
 
     try:
+        # ===== メニュー =====
+        if text in ["グラフ", "グラフ📊"]:
+            url = f"{BASE_URL}/chart/{user_id}"
+            line_bot_api.reply_message(event.reply_token, ImageSendMessage(url, url))
+            return
 
-        # ======================
-        # 📊 今月
-        # ======================
         if text in ["今月", "今月合計"]:
             total = get_month_total(user_id)
             budget = get_budget(user_id)
 
             msg = f"今月：{total}円"
-
             if budget:
-                msg += f"\n予算：{budget}円"
                 msg += f"\n残り：{budget - total}円"
             else:
                 msg += "\n※予算未設定"
 
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
+            return
+
+        if text in ["取り消し", "削除"]:
             message = TemplateSendMessage(
-                alt_text="今月メニュー",
+                alt_text="削除メニュー",
                 template=ButtonsTemplate(
-                    title="今月データ",
-                    text=msg,
+                    title="削除メニュー",
+                    text="どれ削除する？",
                     actions=[
-                        MessageAction(label="✏️予算変更", text="予算設定"),
-                        MessageAction(label="🗑予算削除", text="予算削除")
+                        MessageAction(label="🧹 直前削除", text="直前削除"),
+                        MessageAction(label="📜 履歴削除", text="履歴削除"),
+                        MessageAction(label="💣 全削除", text="全削除")
                     ]
                 )
             )
-
             line_bot_api.reply_message(event.reply_token, message)
             return
 
-        # ======================
-        # 💰 予算設定開始
-        # ======================
-        if text == "予算設定":
-            set_state(user_id, "budget_input")
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("新しい予算いくら？（数字だけ）")
-            )
+        if text == "履歴削除":
+            data = get_recent_expenses(user_id)
+            if not data:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage("データなし"))
+                return
+            send_history_flex(event.reply_token, data)
             return
 
-        # ======================
-        # 💰 予算入力
-        # ======================
-        if state and state[0] == "budget_input":
+        if text.startswith("削除_"):
+            delete_id = text.replace("削除_", "")
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM expenses WHERE id=%s", (delete_id,))
+            conn.commit()
+            cur.close()
+            conn.close()
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("削除完了✅"))
+            return
+
+        if text == "直前削除":
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                DELETE FROM expenses
+                WHERE id = (
+                    SELECT id FROM expenses
+                    WHERE user_id=%s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                )
+            """, (user_id,))
+            conn.commit()
+            cur.close()
+            conn.close()
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("削除OK"))
+            return
+
+        if text == "全削除":
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM expenses WHERE user_id=%s", (user_id,))
+            conn.commit()
+            cur.close()
+            conn.close()
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("全削除したよ"))
+            return
+
+        # ===== 家計簿 =====
+        if text in ["家計簿", "支出入力"]:
+            set_state(user_id, "category")
+            message = TemplateSendMessage(
+                alt_text="カテゴリ",
+                template=ButtonsTemplate(
+                    title="支出入力",
+                    text="カテゴリ選択",
+                    actions=[
+                        MessageAction(label="🍜 食費", text="食費"),
+                        MessageAction(label="🚃 交通費", text="交通費"),
+                        MessageAction(label="🎮 娯楽", text="娯楽"),
+                        MessageAction(label="📦 その他", text="その他"),
+                    ]
+                )
+            )
+            line_bot_api.reply_message(event.reply_token, message)
+            return
+
+        if state and state[0] == "category":
+            category_map = {
+                "食費": "食費", "🍜食費": "食費",
+                "交通費": "交通費", "🚃交通費": "交通費",
+                "娯楽": "娯楽", "🎮娯楽": "娯楽",
+                "その他": "その他", "📦その他": "その他"
+            }
+            category = category_map.get(text)
+            if not category:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage("ボタンから選んでね👇"))
+                return
+
+            set_state(user_id, "amount", category)
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(f"{category}いくら？"))
+            return
+
+        if state and state[0] == "amount":
             match = re.search(r'(\d+)', text)
             if match:
                 amount = int(match.group(1))
-                set_budget(user_id, amount)
+                category = state[1]
+
+                save_expense(user_id, amount, category)
                 clear_state(user_id)
 
                 line_bot_api.reply_message(
                     event.reply_token,
-                    TextSendMessage(f"予算を{amount}円に設定したよ✅")
+                    TextSendMessage(f"{category}：{amount}円 登録完了✅")
                 )
                 return
 
-        # ======================
-        # 🗑 予算削除
-        # ======================
-        if text == "予算削除":
-            delete_budget(user_id)
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("予算削除したよ🗑")
-            )
-            return
-
-        # ======================
-        # グラフ
-        # ======================
-        if text in ["グラフ", "グラフ📊"]:
-            url = f"{BASE_URL}/chart/{user_id}"
-            line_bot_api.reply_message(
-                event.reply_token,
-                ImageSendMessage(url, url)
-            )
-            return
-
-        # ======================
         # fallback
-        # ======================
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage("メニューから選んでね👇")
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage("メニューから選んでね👇"))
 
     except:
         print(traceback.format_exc())
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage("エラー出た😇")
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage("エラー出た😇"))
 
 # ======================
 # 起動
