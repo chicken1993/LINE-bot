@@ -1,40 +1,25 @@
 # ======================
-# Flask
+# Flask / LINE Bot 家計簿
 # ======================
-from flask import Flask, request, Response
 
-# ======================
-# LINE Bot SDK
-# ======================
+from flask import Flask, request, Response
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage,
-    ImageSendMessage,
-    TemplateSendMessage, ButtonsTemplate,
-    MessageAction,
-    FlexSendMessage
+    ImageSendMessage, TemplateSendMessage,
+    ButtonsTemplate, MessageAction, FlexSendMessage
 )
 
-# ======================
-# 基本
-# ======================
 import os, re, io, traceback
 from dotenv import load_dotenv
 
-# ======================
-# DB
-# ======================
 import psycopg2
+from psycopg2.pool import SimpleConnectionPool
 
-# ======================
-# グラフ
-# ======================
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
-
-font_prop = fm.FontProperties(fname="ipaexg.ttf")
 
 # ======================
 # 初期化
@@ -45,18 +30,64 @@ app = Flask(__name__)
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
 BASE_URL = os.getenv("BASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-# 一時保存（履歴削除）
-user_temp_data = {}
+# ======================
+# ★AI自動分類（追加）
+# ======================
+def auto_category(text):
+
+    text = text.lower()
+
+    rules = {
+        "食費": [
+            "コンビニ", "スタバ", "マック", "カフェ", "ラーメン",
+            "寿司", "ごはん", "飯", "ランチ", "ディナー", "弁当", "外食"
+        ],
+        "交通費": [
+            "電車", "バス", "タクシー", "suica", "pasmo", "駅", "乗車"
+        ],
+        "娯楽": [
+            "ゲーム", "映画", "youtube", "アニメ", "課金",
+            "ガチャ", "netflix", "ネトフリ", "動画"
+        ],
+        "日用品": [
+            "洗剤", "ティッシュ", "トイレットペーパー", "シャンプー"
+        ],
+    }
+
+    for category, keywords in rules.items():
+        for kw in keywords:
+            if kw in text:
+                return category
+
+    return "その他"
 
 # ======================
-# DB接続
+# DBプール
 # ======================
+pool = SimpleConnectionPool(
+    1, 10,
+    dsn=DATABASE_URL,
+    sslmode="require"
+)
+
 def get_conn():
-    return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
+    return pool.getconn()
+
+def put_conn(conn):
+    pool.putconn(conn)
+
+# ======================
+# フォント
+# ======================
+try:
+    font_prop = fm.FontProperties(fname="ipaexg.ttf")
+except:
+    font_prop = None
 
 # ======================
 # DB初期化
@@ -92,7 +123,7 @@ def init_db():
 
     conn.commit()
     cur.close()
-    conn.close()
+    put_conn(conn)
 
 init_db()
 
@@ -102,73 +133,90 @@ init_db()
 def set_state(user_id, step, category=None):
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("""
         INSERT INTO user_states (user_id, step, category)
         VALUES (%s, %s, %s)
         ON CONFLICT (user_id)
         DO UPDATE SET step=%s, category=%s
     """, (user_id, step, category, step, category))
+
     conn.commit()
     cur.close()
-    conn.close()
+    put_conn(conn)
 
 def get_state(user_id):
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("SELECT step, category FROM user_states WHERE user_id=%s", (user_id,))
     r = cur.fetchone()
+
     cur.close()
-    conn.close()
+    put_conn(conn)
+
     return r
 
 def clear_state(user_id):
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("DELETE FROM user_states WHERE user_id=%s", (user_id,))
+
     conn.commit()
     cur.close()
-    conn.close()
+    put_conn(conn)
 
 # ======================
-# DB処理
+# DB操作
 # ======================
 def save_expense(user_id, amount, category):
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute(
         "INSERT INTO expenses (user_id, amount, category) VALUES (%s,%s,%s)",
         (user_id, amount, category)
     )
+
     conn.commit()
     cur.close()
-    conn.close()
+    put_conn(conn)
 
 def get_month_total(user_id):
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("""
         SELECT COALESCE(SUM(amount),0)
         FROM expenses
         WHERE user_id=%s
         AND DATE_TRUNC('month', created_at)=DATE_TRUNC('month', CURRENT_DATE)
     """, (user_id,))
+
     total = cur.fetchone()[0]
+
     cur.close()
-    conn.close()
+    put_conn(conn)
+
     return total
 
 def get_budget(user_id):
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("SELECT monthly_budget FROM budgets WHERE user_id=%s", (user_id,))
     r = cur.fetchone()
+
     cur.close()
-    conn.close()
+    put_conn(conn)
+
     return r[0] if r else None
 
 def get_recent_expenses(user_id, limit=10):
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("""
         SELECT id, category, amount
         FROM expenses
@@ -176,40 +224,13 @@ def get_recent_expenses(user_id, limit=10):
         ORDER BY created_at DESC
         LIMIT %s
     """, (user_id, limit))
+
     rows = cur.fetchall()
+
     cur.close()
-    conn.close()
+    put_conn(conn)
+
     return rows
-
-# ======================
-# 履歴Flex
-# ======================
-def send_history_flex(reply_token, data):
-    contents = []
-    for d in data:
-        contents.append({
-            "type": "button",
-            "action": {
-                "type": "message",
-                "label": f"{d[1]} {d[2]}円",
-                "text": f"削除_{d[0]}"
-            }
-        })
-
-    bubble = {
-        "type": "bubble",
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-                {"type": "text", "text": "履歴削除", "weight": "bold", "size": "lg"},
-                {"type": "text", "text": "削除する項目を選択👇", "size": "sm"}
-            ]
-        },
-        "footer": {"type": "box", "layout": "vertical", "contents": contents}
-    }
-
-    line_bot_api.reply_message(reply_token, FlexSendMessage(alt_text="履歴削除", contents=bubble))
 
 # ======================
 # グラフ
@@ -219,15 +240,18 @@ def chart(user_id):
 
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("""
         SELECT category, SUM(amount)
         FROM expenses
         WHERE user_id=%s
         GROUP BY category
     """, (user_id,))
+
     data = cur.fetchall()
+
     cur.close()
-    conn.close()
+    put_conn(conn)
 
     plt.figure(figsize=(6,6))
 
@@ -237,13 +261,14 @@ def chart(user_id):
         labels = [d[0] for d in data]
         values = [d[1] for d in data]
         plt.pie(values, labels=labels, autopct="%1.1f%%",
-                textprops={"fontproperties": font_prop})
+                textprops={"fontproperties": font_prop} if font_prop else None)
 
     plt.axis('equal')
 
     img = io.BytesIO()
     plt.savefig(img, format="png")
     plt.close()
+
     img.seek(0)
 
     return Response(img.getvalue(), mimetype="image/png")
@@ -273,19 +298,24 @@ def home():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
 
-    text = event.message.text.strip()
-    text = text.replace(" ", "").replace("　", "")
-
+    text = event.message.text.strip().replace(" ", "").replace("　", "")
     user_id = event.source.user_id
     state = get_state(user_id)
 
     try:
-        # ===== メニュー =====
+
+        # ===== グラフ =====
         if text in ["グラフ", "グラフ📊"]:
+            if not BASE_URL:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage("BASE_URL未設定"))
+                return
+
             url = f"{BASE_URL}/chart/{user_id}"
-            line_bot_api.reply_message(event.reply_token, ImageSendMessage(url, url))
+            line_bot_api.reply_message(event.reply_token,
+                                       ImageSendMessage(url, url))
             return
 
+        # ===== 今月 =====
         if text in ["今月", "今月合計"]:
             total = get_month_total(user_id)
             budget = get_budget(user_id)
@@ -299,125 +329,46 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
             return
 
-        if text in ["取り消し", "削除"]:
+        # ===== 削除 =====
+        if text in ["削除", "取り消し"]:
             message = TemplateSendMessage(
                 alt_text="削除メニュー",
                 template=ButtonsTemplate(
-                    title="削除メニュー",
-                    text="どれ削除する？",
+                    title="削除",
+                    text="選択してね",
                     actions=[
-                        MessageAction(label="🧹 直前削除", text="直前削除"),
-                        MessageAction(label="📜 履歴削除", text="履歴削除"),
-                        MessageAction(label="💣 全削除", text="全削除")
+                        MessageAction(label="直前削除", text="直前削除"),
+                        MessageAction(label="履歴削除", text="履歴削除"),
+                        MessageAction(label="全削除", text="全削除")
                     ]
                 )
             )
             line_bot_api.reply_message(event.reply_token, message)
             return
 
-        if text == "履歴削除":
-            data = get_recent_expenses(user_id)
-            if not data:
-                line_bot_api.reply_message(event.reply_token, TextSendMessage("データなし"))
-                return
-            send_history_flex(event.reply_token, data)
-            return
-
-        if text.startswith("削除_"):
-            delete_id = text.replace("削除_", "")
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("DELETE FROM expenses WHERE id=%s", (delete_id,))
-            conn.commit()
-            cur.close()
-            conn.close()
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("削除完了✅"))
-            return
-
-        if text == "直前削除":
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("""
-                DELETE FROM expenses
-                WHERE id = (
-                    SELECT id FROM expenses
-                    WHERE user_id=%s
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                )
-            """, (user_id,))
-            conn.commit()
-            cur.close()
-            conn.close()
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("削除OK"))
-            return
-
-        if text == "全削除":
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("DELETE FROM expenses WHERE user_id=%s", (user_id,))
-            conn.commit()
-            cur.close()
-            conn.close()
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("全削除したよ"))
-            return
-
-        # ===== 家計簿 =====
-        if text in ["家計簿", "支出入力"]:
-            set_state(user_id, "category")
-            message = TemplateSendMessage(
-                alt_text="カテゴリ",
-                template=ButtonsTemplate(
-                    title="支出入力",
-                    text="カテゴリ選択",
-                    actions=[
-                        MessageAction(label="🍜 食費", text="食費"),
-                        MessageAction(label="🚃 交通費", text="交通費"),
-                        MessageAction(label="🎮 娯楽", text="娯楽"),
-                        MessageAction(label="📦 その他", text="その他"),
-                    ]
-                )
-            )
-            line_bot_api.reply_message(event.reply_token, message)
-            return
-
-        if state and state[0] == "category":
-            category_map = {
-                "食費": "食費", "🍜食費": "食費",
-                "交通費": "交通費", "🚃交通費": "交通費",
-                "娯楽": "娯楽", "🎮娯楽": "娯楽",
-                "その他": "その他", "📦その他": "その他"
-            }
-            category = category_map.get(text)
-            if not category:
-                line_bot_api.reply_message(event.reply_token, TextSendMessage("ボタンから選んでね👇"))
-                return
-
-            set_state(user_id, "amount", category)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(f"{category}いくら？"))
-            return
-
+        # ===== カテゴリ入力モード =====
         if state and state[0] == "amount":
             match = re.search(r'(\d+)', text)
             if match:
                 amount = int(match.group(1))
-                category = state[1]
+
+                # ★ここがAI分類
+                category = auto_category(text)
 
                 save_expense(user_id, amount, category)
                 clear_state(user_id)
 
                 line_bot_api.reply_message(
                     event.reply_token,
-                    TextSendMessage(f"{category}：{amount}円 登録完了✅")
+                    TextSendMessage(f"{category}:{amount}円 登録OK")
                 )
                 return
 
-        # fallback
-        line_bot_api.reply_message(event.reply_token, TextSendMessage("メニューから選んでね👇"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage("メニューから選んで"))
 
     except:
         print(traceback.format_exc())
-        line_bot_api.reply_message(event.reply_token, TextSendMessage("エラー出た😇"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage("エラー"))
 
 # ======================
 # 起動
