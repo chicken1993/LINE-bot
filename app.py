@@ -37,6 +37,11 @@ import matplotlib.font_manager as fm
 font_prop = fm.FontProperties(fname="ipaexg.ttf")
 
 # ======================
+# スケジューラ
+# ======================
+from apscheduler.schedulers.background import BackgroundScheduler
+
+# ======================
 # 初期化
 # ======================
 load_dotenv()
@@ -52,9 +57,7 @@ BASE_URL = os.getenv("BASE_URL")
 def get_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
-# ======================
-# 初期化DB
-# ======================
+
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
@@ -84,6 +87,15 @@ def init_db():
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS category_budgets (
+            user_id TEXT,
+            category TEXT,
+            budget INTEGER,
+            PRIMARY KEY (user_id, category)
+        )
+    """)
+
     conn.commit()
     cur.close()
     conn.close()
@@ -106,6 +118,7 @@ def set_state(user_id, step, category=None):
     cur.close()
     conn.close()
 
+
 def get_state(user_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -115,6 +128,7 @@ def get_state(user_id):
     conn.close()
     return r
 
+
 def clear_state(user_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -122,6 +136,12 @@ def clear_state(user_id):
     conn.commit()
     cur.close()
     conn.close()
+
+# ======================
+# utils
+# ======================
+def is_number(text):
+    return bool(re.fullmatch(r"\d+", text))
 
 # ======================
 # expense
@@ -137,6 +157,7 @@ def save_expense(user_id, amount, category):
     cur.close()
     conn.close()
 
+
 def get_month_total(user_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -151,6 +172,7 @@ def get_month_total(user_id):
     conn.close()
     return total
 
+
 def get_budget(user_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -159,6 +181,7 @@ def get_budget(user_id):
     cur.close()
     conn.close()
     return r[0] if r else None
+
 
 def get_recent(user_id, limit=10):
     conn = get_conn()
@@ -176,41 +199,52 @@ def get_recent(user_id, limit=10):
     return r
 
 # ======================
-# 履歴UI
+# 80%通知
 # ======================
-def send_history(reply_token, data):
-    contents = []
+def check_budget_warning(user_id):
+    total = get_month_total(user_id)
+    budget = get_budget(user_id)
 
-    for d in data:
-        contents.append({
-            "type": "button",
-            "action": {
-                "type": "message",
-                "label": f"{d[1]} {d[2]}円",
-                "text": f"del_{d[0]}"
-            }
-        })
+    if not budget:
+        return
 
-    bubble = {
-        "type": "bubble",
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-                {"type": "text", "text": "履歴削除", "weight": "bold"}
-            ]
-        },
-        "footer": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": contents
-        }
-    }
+    if total >= budget * 0.8:
+        line_bot_api.push_message(
+            user_id,
+            TextSendMessage(f"⚠️ 予算80%超え\n今月：{total}円 / {budget}円")
+        )
 
-    line_bot_api.reply_message(
-        reply_token,
-        FlexSendMessage(alt_text="履歴削除", contents=bubble)
-    )
+# ======================
+# 月次レポート
+# ======================
+def monthly_report():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("SELECT DISTINCT user_id FROM expenses")
+    users = cur.fetchall()
+
+    for (user_id,) in users:
+        total = get_month_total(user_id)
+        budget = get_budget(user_id)
+
+        msg = f"📊 月次レポート\n今月：{total}円"
+
+        if budget:
+            msg += f"\n予算：{budget}円"
+            msg += f"\n達成率：{int(total/budget*100)}%"
+
+        line_bot_api.push_message(user_id, TextSendMessage(msg))
+
+    cur.close()
+    conn.close()
+
+# ======================
+# scheduler
+# ======================
+scheduler = BackgroundScheduler()
+scheduler.add_job(monthly_report, "cron", hour=20, minute=0)
+scheduler.start()
 
 # ======================
 # webhook
@@ -226,6 +260,7 @@ def callback():
         print(traceback.format_exc())
 
     return "OK"
+
 
 @app.route("/")
 def home():
@@ -243,30 +278,7 @@ def handle_message(event):
 
     try:
 
-        # ======================
-        # 今月（UI安定版）
-        # ======================
-        if text in ["今月", "今月合計"]:
-            total = get_month_total(user_id)
-            budget = get_budget(user_id)
-
-            msg = f"使用：{total}円"
-
-            if budget:
-                msg += f"\n予算：{budget}円"
-                msg += f"\n残り：{budget - total}円"
-            else:
-                msg += "\n予算未設定"
-
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(msg)
-            )
-            return
-
-        # ======================
-        # 支出入力（完全修正）
-        # ======================
+        # ===== 支出入力 =====
         if text in ["家計簿", "支出入力"]:
             set_state(user_id, "category")
 
@@ -278,10 +290,10 @@ def handle_message(event):
                         title="支出入力",
                         text="カテゴリ選択",
                         actions=[
-                            MessageAction(label="🍜 食費", text="食費"),
-                            MessageAction(label="🚃 交通費", text="交通費"),
-                            MessageAction(label="🎮 娯楽", text="娯楽"),
-                            MessageAction(label="📦 その他", text="その他"),
+                            MessageAction(label="食費", text="食費"),
+                            MessageAction(label="交通費", text="交通費"),
+                            MessageAction(label="娯楽", text="娯楽"),
+                            MessageAction(label="その他", text="その他"),
                         ]
                     )
                 )
@@ -290,7 +302,7 @@ def handle_message(event):
 
         if state and state[0] == "category":
             set_state(user_id, "amount", text)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("金額入力して"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("金額入力"))
             return
 
         if state and state[0] == "amount":
@@ -298,6 +310,7 @@ def handle_message(event):
             category = state[1]
 
             save_expense(user_id, amount, category)
+            check_budget_warning(user_id)
 
             clear_state(user_id)
 
@@ -307,9 +320,24 @@ def handle_message(event):
             )
             return
 
-        # ======================
-        # グラフ（単機能化）
-        # ======================
+        # ===== 今月 =====
+        if text in ["今月", "今月合計"]:
+            total = get_month_total(user_id)
+            budget = get_budget(user_id)
+
+            msg = f"使用：{total}円"
+
+            if budget:
+                msg += f"\n予算：{budget}円"
+                msg += f"\n残り：{budget - total}円"
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(msg)
+            )
+            return
+
+        # ===== グラフ =====
         if text in ["グラフ", "グラフ📊"]:
             url = f"{BASE_URL}/chart/{user_id}"
             line_bot_api.reply_message(
@@ -318,9 +346,7 @@ def handle_message(event):
             )
             return
 
-        # ======================
-        # 削除メニュー（修正版）
-        # ======================
+        # ===== 削除 =====
         if text in ["削除", "取り消し"]:
             line_bot_api.reply_message(
                 event.reply_token,
@@ -339,7 +365,6 @@ def handle_message(event):
             )
             return
 
-        # 直近削除
         if text == "直近削除":
             conn = get_conn()
             cur = conn.cursor()
@@ -359,13 +384,40 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage("削除OK"))
             return
 
-        # 履歴
         if text == "履歴削除":
-            data = get_recent(user_id, 10)
-            send_history(event.reply_token, data)
+            data = get_recent(user_id)
+
+            contents = []
+            for d in data:
+                contents.append({
+                    "type": "button",
+                    "action": {
+                        "type": "message",
+                        "label": f"{d[1]} {d[2]}円",
+                        "text": f"del_{d[0]}"
+                    }
+                })
+
+            bubble = {
+                "type": "bubble",
+                "body": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [{"type": "text", "text": "履歴削除"}]
+                },
+                "footer": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": contents
+                }
+            }
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                FlexSendMessage(alt_text="履歴", contents=bubble)
+            )
             return
 
-        # 個別削除
         if text.startswith("del_"):
             did = text.replace("del_", "")
 
@@ -376,10 +428,9 @@ def handle_message(event):
             cur.close()
             conn.close()
 
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("削除完了"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("削除OK"))
             return
 
-        # 今月削除
         if text == "今月削除":
             conn = get_conn()
             cur = conn.cursor()
@@ -400,3 +451,9 @@ def handle_message(event):
     except:
         print(traceback.format_exc())
         line_bot_api.reply_message(event.reply_token, TextSendMessage("エラー"))
+
+# ======================
+# run
+# ======================
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
