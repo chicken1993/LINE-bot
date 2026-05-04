@@ -1,5 +1,5 @@
 # ======================
-# Flask / LINE Bot 家計簿（強化版）
+# Flask / LINE Bot 家計簿（最終安定版）
 # ======================
 
 from flask import Flask, request, Response
@@ -16,6 +16,9 @@ from psycopg2.pool import SimpleConnectionPool
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# 日本語フォント対策（警告回避）
+plt.rcParams["font.family"] = "DejaVu Sans"
 
 # ======================
 # 初期化
@@ -42,12 +45,13 @@ def put_conn(conn):
     pool.putconn(conn)
 
 # ======================
-# DB初期化
+# DB初期化（★ここが重要）
 # ======================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
+    # 支出テーブル
     cur.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
             id SERIAL PRIMARY KEY,
@@ -58,12 +62,17 @@ def init_db():
         )
     """)
 
-    # ★ 予算テーブル追加
+    # 予算テーブル（まず作る）
     cur.execute("""
         CREATE TABLE IF NOT EXISTS budgets (
-            user_id TEXT PRIMARY KEY,
-            amount INTEGER
+            user_id TEXT PRIMARY KEY
         )
+    """)
+
+    # ★ amountカラムが無ければ追加（これが神修正）
+    cur.execute("""
+        ALTER TABLE budgets
+        ADD COLUMN IF NOT EXISTS amount INTEGER
     """)
 
     conn.commit()
@@ -100,7 +109,6 @@ def get_month_total(user_id):
     put_conn(conn)
     return total
 
-# ★ 予算取得
 def get_budget(user_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -110,7 +118,6 @@ def get_budget(user_id):
     put_conn(conn)
     return result[0] if result else None
 
-# ★ 予算保存
 def set_budget(user_id, amount):
     conn = get_conn()
     cur = conn.cursor()
@@ -262,7 +269,6 @@ def handle_message(event):
 
             msg = f"{category}:{amount}円 登録OK👍"
 
-            # ★ 褒めロジック
             if amount < 500:
                 msg += "\n節約ナイス！"
             elif amount > 3000:
