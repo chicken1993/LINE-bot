@@ -18,12 +18,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # ======================
-# フォント安全対応（ここが重要）
+# フォント完全安定化（英語固定）
 # ======================
-try:
-    plt.rcParams["font.family"] = "IPAexGothic"
-except:
-    plt.rcParams["font.family"] = "DejaVu Sans"
+plt.rcParams["font.family"] = "DejaVu Sans"
 
 # ======================
 # 初期化
@@ -72,7 +69,7 @@ def init_db():
         )
     """)
 
-    # ★ カラム補完（重要）
+    # カラム補完
     cur.execute("""
         ALTER TABLE budgets
         ADD COLUMN IF NOT EXISTS amount INTEGER
@@ -159,8 +156,21 @@ def chart(user_id):
     if not data:
         plt.text(0.5, 0.5, "No Data", ha='center')
     else:
-        labels = [str(d[0]) for d in data]  # ←安全化
+        # ★ 日本語を英語に変換（安全化）
+        def to_en(cat):
+            mapping = {
+                "食費": "Food",
+                "交通費": "Transport",
+                "光熱費": "Utilities",
+                "交際費": "Social",
+                "日用品": "Daily",
+                "娯楽": "Fun"
+            }
+            return mapping.get(cat, "Other")
+
+        labels = [to_en(str(d[0])) for d in data]
         values = [d[1] for d in data]
+
         plt.pie(values, labels=labels, autopct="%1.1f%%")
 
     img = io.BytesIO()
