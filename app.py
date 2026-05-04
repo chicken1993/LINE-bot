@@ -7,6 +7,10 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.models import *
 import os, re, io, traceback
 
+# ★ ここ追加（最重要）
+from dotenv import load_dotenv
+load_dotenv()
+
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 
@@ -23,6 +27,9 @@ CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
 BASE_URL = os.getenv("BASE_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# デバッグ（確認用）
+print("TOKEN:", CHANNEL_ACCESS_TOKEN)
 
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
