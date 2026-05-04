@@ -1,5 +1,5 @@
 # ======================
-# Flask / LINE Bot 家計簿（日本語完全対応版）
+# Flask / LINE Bot 家計簿（日本語完全対応・安定版）
 # ======================
 
 from flask import Flask, request, Response
@@ -21,13 +21,21 @@ from matplotlib import font_manager
 # ======================
 # 日本語フォント設定（最重要）
 # ======================
-FONT_PATH = "./fonts/ipaexg.ttf"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_PATH = os.path.join(BASE_DIR, "fonts", "ipaexg.ttf")
+
+font_prop = None
 
 if os.path.exists(FONT_PATH):
-    font_prop = font_manager.FontProperties(fname=FONT_PATH)
-    plt.rcParams["font.family"] = font_prop.get_name()
+    try:
+        font_prop = font_manager.FontProperties(fname=FONT_PATH)
+        plt.rcParams["font.family"] = font_prop.get_name()
+        print("✅ 日本語フォント読み込み成功")
+    except Exception as e:
+        print("❌ フォント読み込み失敗:", e)
+        plt.rcParams["font.family"] = "DejaVu Sans"
 else:
-    font_prop = None
+    print("❌ フォントファイルが存在しない:", FONT_PATH)
     plt.rcParams["font.family"] = "DejaVu Sans"
 
 # ======================
@@ -161,7 +169,10 @@ def chart(user_id):
     plt.figure(figsize=(6,6))
 
     if not data:
-        plt.text(0.5, 0.5, "データなし", ha='center', fontproperties=font_prop)
+        if font_prop:
+            plt.text(0.5, 0.5, "データなし", ha='center', fontproperties=font_prop)
+        else:
+            plt.text(0.5, 0.5, "No Data", ha='center')
     else:
         labels = [str(d[0]) for d in data]
         values = [d[1] for d in data]
@@ -172,6 +183,8 @@ def chart(user_id):
             autopct="%1.1f%%",
             textprops={"fontproperties": font_prop} if font_prop else {}
         )
+
+    plt.tight_layout()
 
     img = io.BytesIO()
     plt.savefig(img, format="png")
