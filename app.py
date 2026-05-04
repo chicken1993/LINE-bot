@@ -1,5 +1,5 @@
 # ======================
-# Flask / LINE Bot 家計簿（最終完全版）
+# Flask / LINE Bot 家計簿（最終完全安定版）
 # ======================
 
 from flask import Flask, request, Response
@@ -17,13 +17,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ★ 日本語フォント完全対応
-try:
-    import japanize_matplotlib
-except:
-    pass
-
-plt.rcParams["font.family"] = "IPAexGothic"
+# ★ 日本語フォント（これだけでOK）
+import japanize_matplotlib
 
 # ======================
 # 初期化
@@ -56,7 +51,6 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # 支出テーブル
     cur.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
             id SERIAL PRIMARY KEY,
@@ -67,14 +61,13 @@ def init_db():
         )
     """)
 
-    # 予算テーブル
     cur.execute("""
         CREATE TABLE IF NOT EXISTS budgets (
             user_id TEXT PRIMARY KEY
         )
     """)
 
-    # ★ カラム補完（神）
+    # ★ カラム補完（安全）
     cur.execute("""
         ALTER TABLE budgets
         ADD COLUMN IF NOT EXISTS amount INTEGER
@@ -163,10 +156,18 @@ def chart(user_id):
     else:
         labels = [d[0] for d in data]
         values = [d[1] for d in data]
-        plt.pie(values, labels=labels, autopct="%1.1f%%")
+
+        # ★ 見やすくする
+        plt.pie(
+            values,
+            labels=labels,
+            autopct="%1.1f%%",
+            startangle=90
+        )
+        plt.axis('equal')
 
     img = io.BytesIO()
-    plt.savefig(img, format="png")
+    plt.savefig(img, format="png", bbox_inches='tight')
     plt.close()
     img.seek(0)
 
@@ -202,7 +203,6 @@ def handle_message(event):
 
     try:
 
-        # ===== 使い方 =====
         if text in ["はじめて", "使い方", "ヘルプ"]:
             msg = """【使い方】
 ①「1000 食費」で即登録
@@ -290,7 +290,6 @@ def handle_message(event):
             )
             return
 
-        # ===== fallback =====
         line_bot_api.reply_message(event.reply_token, TextSendMessage("「1000 食費」で入力できるよ"))
 
     except:
