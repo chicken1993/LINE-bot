@@ -1,5 +1,5 @@
 # ======================
-# Flask / LINE Bot 家計簿（最終安定版・完全修正）
+# Flask / LINE Bot 家計簿（日本語完全対応版）
 # ======================
 
 from flask import Flask, request, Response
@@ -16,11 +16,19 @@ from psycopg2.pool import SimpleConnectionPool
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 
 # ======================
-# フォント完全安定化（英語固定）
+# 日本語フォント設定（最重要）
 # ======================
-plt.rcParams["font.family"] = "DejaVu Sans"
+FONT_PATH = "./fonts/ipaexg.ttf"
+
+if os.path.exists(FONT_PATH):
+    font_prop = font_manager.FontProperties(fname=FONT_PATH)
+    plt.rcParams["font.family"] = font_prop.get_name()
+else:
+    font_prop = None
+    plt.rcParams["font.family"] = "DejaVu Sans"
 
 # ======================
 # 初期化
@@ -69,7 +77,6 @@ def init_db():
         )
     """)
 
-    # カラム補完
     cur.execute("""
         ALTER TABLE budgets
         ADD COLUMN IF NOT EXISTS amount INTEGER
@@ -154,24 +161,17 @@ def chart(user_id):
     plt.figure(figsize=(6,6))
 
     if not data:
-        plt.text(0.5, 0.5, "No Data", ha='center')
+        plt.text(0.5, 0.5, "データなし", ha='center', fontproperties=font_prop)
     else:
-        # ★ 日本語を英語に変換（安全化）
-        def to_en(cat):
-            mapping = {
-                "食費": "Food",
-                "交通費": "Transport",
-                "光熱費": "Utilities",
-                "交際費": "Social",
-                "日用品": "Daily",
-                "娯楽": "Fun"
-            }
-            return mapping.get(cat, "Other")
-
-        labels = [to_en(str(d[0])) for d in data]
+        labels = [str(d[0]) for d in data]
         values = [d[1] for d in data]
 
-        plt.pie(values, labels=labels, autopct="%1.1f%%")
+        plt.pie(
+            values,
+            labels=labels,
+            autopct="%1.1f%%",
+            textprops={"fontproperties": font_prop} if font_prop else {}
+        )
 
     img = io.BytesIO()
     plt.savefig(img, format="png")
