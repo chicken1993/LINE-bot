@@ -1,5 +1,5 @@
 # ======================
-# Flask / LINE Bot 家計簿（最終安定版）
+# Flask / LINE Bot 家計簿（最終完全版）
 # ======================
 
 from flask import Flask, request, Response
@@ -17,8 +17,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# 日本語フォント対策（警告回避）
-plt.rcParams["font.family"] = "DejaVu Sans"
+# ★ 日本語フォント完全対応
+try:
+    import japanize_matplotlib
+except:
+    pass
+
+plt.rcParams["font.family"] = "IPAexGothic"
 
 # ======================
 # 初期化
@@ -45,7 +50,7 @@ def put_conn(conn):
     pool.putconn(conn)
 
 # ======================
-# DB初期化（★ここが重要）
+# DB初期化
 # ======================
 def init_db():
     conn = get_conn()
@@ -62,14 +67,14 @@ def init_db():
         )
     """)
 
-    # 予算テーブル（まず作る）
+    # 予算テーブル
     cur.execute("""
         CREATE TABLE IF NOT EXISTS budgets (
             user_id TEXT PRIMARY KEY
         )
     """)
 
-    # ★ amountカラムが無ければ追加（これが神修正）
+    # ★ カラム補完（神）
     cur.execute("""
         ALTER TABLE budgets
         ADD COLUMN IF NOT EXISTS amount INTEGER
