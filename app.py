@@ -1,5 +1,5 @@
 # ======================
-# Flask / LINE Bot 家計簿（最終完全安定版）
+# Flask / LINE Bot 家計簿（最終安定版・完全修正）
 # ======================
 
 from flask import Flask, request, Response
@@ -17,8 +17,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ★ 日本語フォント（これだけでOK）
-import japanize_matplotlib
+# ======================
+# フォント安全対応（ここが重要）
+# ======================
+try:
+    plt.rcParams["font.family"] = "IPAexGothic"
+except:
+    plt.rcParams["font.family"] = "DejaVu Sans"
 
 # ======================
 # 初期化
@@ -67,7 +72,7 @@ def init_db():
         )
     """)
 
-    # ★ カラム補完（安全）
+    # ★ カラム補完（重要）
     cur.execute("""
         ALTER TABLE budgets
         ADD COLUMN IF NOT EXISTS amount INTEGER
@@ -154,20 +159,12 @@ def chart(user_id):
     if not data:
         plt.text(0.5, 0.5, "No Data", ha='center')
     else:
-        labels = [d[0] for d in data]
+        labels = [str(d[0]) for d in data]  # ←安全化
         values = [d[1] for d in data]
-
-        # ★ 見やすくする
-        plt.pie(
-            values,
-            labels=labels,
-            autopct="%1.1f%%",
-            startangle=90
-        )
-        plt.axis('equal')
+        plt.pie(values, labels=labels, autopct="%1.1f%%")
 
     img = io.BytesIO()
-    plt.savefig(img, format="png", bbox_inches='tight')
+    plt.savefig(img, format="png")
     plt.close()
     img.seek(0)
 
@@ -213,19 +210,16 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
             return
 
-        # ===== 予算設定 =====
         budget_match = re.match(r'予算\s*(\d+)', text)
         if budget_match:
             amount = int(budget_match.group(1))
             set_budget(user_id, amount)
-
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(f"予算を{amount}円に設定したよ👍")
             )
             return
 
-        # ===== 今月 =====
         if text in ["今月", "今月合計"]:
             total = get_month_total(user_id)
             budget = get_budget(user_id)
@@ -245,13 +239,11 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
             return
 
-        # ===== グラフ =====
         if text == "グラフ":
             url = f"{BASE_URL}/chart/{user_id}"
             line_bot_api.reply_message(event.reply_token, ImageSendMessage(url, url))
             return
 
-        # ===== リセット =====
         if text == "リセット":
             conn = get_conn()
             cur = conn.cursor()
@@ -263,7 +255,6 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage("データ削除しました"))
             return
 
-        # ===== 一発入力 =====
         quick = re.match(r'^(\d+)(円)?\s*(.+)$', text)
 
         if quick:
@@ -282,7 +273,6 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
             return
 
-        # ===== 初回誘導 =====
         if not re.match(r'\d+', text):
             line_bot_api.reply_message(
                 event.reply_token,
