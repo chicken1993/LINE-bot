@@ -19,23 +19,35 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 # ======================
-# 日本語フォント設定（最重要）
+# 日本語フォント設定（最強安定版）
 # ======================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT_PATH = os.path.join(BASE_DIR, "fonts", "ipaexg.ttf")
 
 font_prop = None
 
-if os.path.exists(FONT_PATH):
-    try:
-        font_prop = font_manager.FontProperties(fname=FONT_PATH)
+# ① Render / Linux想定（Noto Sans）
+NOTO_PATH = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+
+# ② ローカルフォント（ipaexg）
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+IPAEX_PATH = os.path.join(BASE_DIR, "fonts", "ipaexg.ttf")
+
+try:
+    if os.path.exists(NOTO_PATH):
+        font_prop = font_manager.FontProperties(fname=NOTO_PATH)
         plt.rcParams["font.family"] = font_prop.get_name()
-        print("✅ 日本語フォント読み込み成功")
-    except Exception as e:
-        print("❌ フォント読み込み失敗:", e)
+        print("✅ Noto Sans CJK フォント使用")
+
+    elif os.path.exists(IPAEX_PATH):
+        font_prop = font_manager.FontProperties(fname=IPAEX_PATH)
+        plt.rcParams["font.family"] = font_prop.get_name()
+        print("✅ IPAexGothic フォント使用")
+
+    else:
+        print("⚠️ 日本語フォントなし → DejaVu Sans")
         plt.rcParams["font.family"] = "DejaVu Sans"
-else:
-    print("❌ フォントファイルが存在しない:", FONT_PATH)
+
+except Exception as e:
+    print("❌ フォント設定エラー:", e)
     plt.rcParams["font.family"] = "DejaVu Sans"
 
 # ======================
