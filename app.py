@@ -1,7 +1,8 @@
 # ======================
-# Flask / LINE Bot 家計簿（日本語完全対応・安定版）
+# Flask / LINE Bot 家計簿（日本語完全対応・最終安定版）
 # ======================
 
+# ===== ライブラリ読み込み（部品を使う準備） =====
 from flask import Flask, request, Response
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import *
@@ -14,34 +15,41 @@ import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use("Agg")  # 画面なしでグラフ作るモード
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 # ======================
-# 日本語フォント設定（完全安定版）
+# 日本語フォント設定（ここ超重要）
 # ======================
 
-font_prop = None
+font_prop = None  # フォント情報入れる変数
 
+# このファイル(app.py)の場所を取得
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# fonts/ipaexg.ttf を指す
 FONT_PATH = os.path.join(BASE_DIR, "fonts", "ipaexg.ttf")
 
 try:
     if os.path.exists(FONT_PATH):
 
-        # ★重要：フォント登録（これがミスると文字化け）
+        # フォントをmatplotlibに登録（これしないと日本語崩れる）
         font_manager.fontManager.addfont(FONT_PATH)
 
+        # フォントを指定
         font_prop = font_manager.FontProperties(fname=FONT_PATH)
 
-        # matplotlibへ強制適用
+        # 全グラフに適用
         plt.rcParams["font.family"] = font_prop.get_name()
 
-        print("✅ IPAexGothic 使用OK（完全反映）")
+        # マイナス文字の文字化け防止
+        plt.rcParams["axes.unicode_minus"] = False
+
+        print("✅ 日本語フォントOK")
 
     else:
-        print("❌ フォントなし → DejaVu Sans")
+        print("❌ フォントなし → 英語フォント使用")
         plt.rcParams["font.family"] = "DejaVu Sans"
 
 except Exception as e:
@@ -49,20 +57,22 @@ except Exception as e:
     plt.rcParams["font.family"] = "DejaVu Sans"
 
 # ======================
-# 初期化
+# Flask起動（サーバー本体）
 # ======================
 app = Flask(__name__)
 
+# 環境変数（Renderに設定してるやつ）
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
 BASE_URL = os.getenv("BASE_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# LINE接続
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
 # ======================
-# DBプール
+# DB接続プール（高速化）
 # ======================
 pool = SimpleConnectionPool(1, 10, dsn=DATABASE_URL, sslmode="require")
 
@@ -73,12 +83,13 @@ def put_conn(conn):
     pool.putconn(conn)
 
 # ======================
-# DB初期化
+# DB初期化（テーブル作成）
 # ======================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
+    # 支出テーブル
     cur.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
             id SERIAL PRIMARY KEY,
@@ -89,6 +100,7 @@ def init_db():
         )
     """)
 
+    # 予算テーブル
     cur.execute("""
         CREATE TABLE IF NOT EXISTS budgets (
             user_id TEXT PRIMARY KEY
@@ -157,7 +169,7 @@ def set_budget(user_id, amount):
     put_conn(conn)
 
 # ======================
-# グラフ
+# グラフ生成API
 # ======================
 @app.route("/chart/<user_id>")
 def chart(user_id):
@@ -179,10 +191,8 @@ def chart(user_id):
     plt.figure(figsize=(6,6))
 
     if not data:
-        if font_prop:
-            plt.text(0.5, 0.5, "データなし", ha='center', fontproperties=font_prop)
-        else:
-            plt.text(0.5, 0.5, "No Data", ha='center')
+        plt.text(0.5, 0.5, "データなし", ha='center',
+                 fontproperties=font_prop if font_prop else None)
     else:
         labels = [str(d[0]) for d in data]
         values = [d[1] for d in data]
@@ -204,7 +214,7 @@ def chart(user_id):
     return Response(img.getvalue(), mimetype="image/png")
 
 # ======================
-# Webhook
+# LINE Webhook
 # ======================
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -223,7 +233,7 @@ def home():
     return "OK"
 
 # ======================
-# メイン処理
+# メイン処理（ここが一番重要）
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -233,16 +243,18 @@ def handle_message(event):
 
     try:
 
+        # ===== ヘルプ =====
         if text in ["はじめて", "使い方", "ヘルプ"]:
             msg = """【使い方】
-①「1000 食費」で即登録
-②「今月」で合計確認
-③「グラフ」で内訳チェック
-④「予算 30000」で上限設定
+①「1000 食費」で登録
+②「今月」で確認
+③「グラフ」で分析
+④「予算 30000」で制限
 """
             line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
             return
 
+        # ===== 予算設定 =====
         budget_match = re.match(r'予算\s*(\d+)', text)
         if budget_match:
             amount = int(budget_match.group(1))
@@ -253,6 +265,7 @@ def handle_message(event):
             )
             return
 
+        # ===== 今月 =====
         if text in ["今月", "今月合計"]:
             total = get_month_total(user_id)
             budget = get_budget(user_id)
@@ -272,11 +285,13 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
             return
 
+        # ===== グラフ =====
         if text == "グラフ":
             url = f"{BASE_URL}/chart/{user_id}"
             line_bot_api.reply_message(event.reply_token, ImageSendMessage(url, url))
             return
 
+        # ===== リセット =====
         if text == "リセット":
             conn = get_conn()
             cur = conn.cursor()
@@ -285,9 +300,10 @@ def handle_message(event):
             cur.close()
             put_conn(conn)
 
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("データ削除しました"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage("削除しました"))
             return
 
+        # ===== 金額入力 =====
         quick = re.match(r'^(\d+)(円)?\s*(.+)$', text)
 
         if quick:
@@ -298,22 +314,18 @@ def handle_message(event):
 
             msg = f"{category}:{amount}円 登録OK👍"
 
-            if amount < 500:
-                msg += "\n節約ナイス！"
-            elif amount > 3000:
-                msg += "\nちょっと使いすぎかも？"
-
             line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
             return
 
+        # ===== その他 =====
         if not re.match(r'\d+', text):
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage("はじめての方は「使い方」と送ってね👍")
+                TextSendMessage("「使い方」と送ると説明出るよ👍")
             )
             return
 
-        line_bot_api.reply_message(event.reply_token, TextSendMessage("「1000 食費」で入力できるよ"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage("入力形式：1000 食費"))
 
     except:
         print(traceback.format_exc())
