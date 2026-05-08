@@ -1,5 +1,5 @@
 # ======================
-# Flask / LINE Bot 家計簿（履歴削除UI完全版）
+# Flask / LINE Bot 家計簿（予算機能追加版）
 # ======================
 
 from flask import Flask, request, send_file
@@ -117,6 +117,17 @@ def init_db():
             id SERIAL PRIMARY KEY,
             user_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ======================
+    # 予算テーブル
+    # ======================
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS budgets (
+            user_id TEXT PRIMARY KEY,
+            amount INTEGER
         )
     """)
 
@@ -241,6 +252,78 @@ def delete_by_id(expense_id, user_id):
         expense_id,
         user_id
     ))
+
+    conn.commit()
+
+    cur.close()
+    put_conn(conn)
+
+# ======================
+# 予算保存
+# ======================
+
+def save_budget(user_id, amount):
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO budgets (
+            user_id,
+            amount
+        )
+        VALUES (%s,%s)
+
+        ON CONFLICT (user_id)
+        DO UPDATE SET amount=EXCLUDED.amount
+    """, (
+        user_id,
+        amount
+    ))
+
+    conn.commit()
+
+    cur.close()
+    put_conn(conn)
+
+# ======================
+# 予算取得
+# ======================
+
+def get_budget(user_id):
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT amount
+        FROM budgets
+        WHERE user_id=%s
+    """, (user_id,))
+
+    row = cur.fetchone()
+
+    cur.close()
+    put_conn(conn)
+
+    if row:
+        return row[0]
+
+    return None
+
+# ======================
+# 予算削除
+# ======================
+
+def delete_budget(user_id):
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM budgets
+        WHERE user_id=%s
+    """, (user_id,))
 
     conn.commit()
 
@@ -514,6 +597,115 @@ def handle_text(event):
             return
 
         # ======================
+        # 予算メニュー
+        # ======================
+
+        if text == "予算":
+
+            buttons = TemplateSendMessage(
+                alt_text="予算メニュー",
+                template=ButtonsTemplate(
+                    title="予算メニュー",
+                    text="何をする？",
+                    actions=[
+
+                        MessageAction(
+                            label="予算を追加する",
+                            text="設定予算"
+                        ),
+
+                        MessageAction(
+                            label="予算の確認",
+                            text="予算確認"
+                        ),
+
+                        MessageAction(
+                            label="予算リセット",
+                            text="予算リセット"
+                        )
+                    ]
+                )
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                buttons
+            )
+
+            return
+
+        # ======================
+        # 予算設定開始
+        # ======================
+
+        if text == "設定予算":
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    "予算金額を入力してね👇\n"
+                    "例：50000"
+                )
+            )
+
+            return
+
+        # ======================
+        # 予算確認
+        # ======================
+
+        if text == "予算確認":
+
+            budget = get_budget(user_id)
+
+            if not budget:
+
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(
+                        "予算未設定だよ"
+                    )
+                )
+
+                return
+
+            rows = get_month_data(user_id)
+
+            total = sum(
+                amount for _, amount in rows
+            )
+
+            remain = budget - total
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    f"今月予算：{budget}円\n"
+                    f"使用額：{total}円\n"
+                    f"残り：{remain}円"
+                )
+            )
+
+            return
+
+        # ======================
+        # 予算リセット
+        # ======================
+
+        if text == "予算リセット":
+
+            delete_budget(user_id)
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    "予算リセットしたよ🗑️"
+                )
+            )
+
+            return
+
+        # ======================
         # リセットメニュー
         # ======================
 
@@ -728,6 +920,26 @@ def handle_text(event):
 
             return
 
+        # ======================
+        # 予算入力
+        # ======================
+
+        if re.fullmatch(r'\d{3,8}', text):
+
+            save_budget(
+                user_id,
+                int(text)
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    f"予算 {text}円 を設定したよ👍"
+                )
+            )
+
+            return
+
         # 通常入力
         match = re.match(
             r'^(\d+)\s*(.+)$',
@@ -762,6 +974,7 @@ def handle_text(event):
                 "1000 食費\n"
                 "今月\n"
                 "グラフ\n"
+                "予算\n"
                 "リセット\n"
                 "レシート送信📸"
             )
