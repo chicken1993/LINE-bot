@@ -1,5 +1,5 @@
 # ======================
-# Flask / LINE Bot 家計簿（予算機能追加版）
+# Flask / LINE Bot 家計簿（予算警告追加版）
 # ======================
 
 from flask import Flask, request, send_file
@@ -7,6 +7,8 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.models import *
 import os, re, traceback
 from collections import defaultdict
+from datetime import datetime
+import calendar
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -119,10 +121,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-
-    # ======================
-    # 予算テーブル
-    # ======================
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS budgets (
@@ -677,12 +675,47 @@ def handle_text(event):
 
             remain = budget - total
 
+            # ======================
+            # 残り日数
+            # ======================
+
+            now = datetime.now()
+
+            last_day = calendar.monthrange(
+                now.year,
+                now.month
+            )[1]
+
+            remain_days = last_day - now.day
+
+            if remain_days <= 0:
+                remain_days = 1
+
+            # ======================
+            # 1日使える金額
+            # ======================
+
+            per_day = int(remain / remain_days)
+
+            # ======================
+            # 超過警告
+            # ======================
+
+            warning = ""
+
+            if remain < 0:
+
+                warning = "\n⚠️予算オーバー"
+
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(
-                    f"今月予算：{budget}円\n"
-                    f"使用額：{total}円\n"
-                    f"残り：{remain}円"
+                    f"💰今月予算：{budget}円\n"
+                    f"📉使用額：{total}円\n"
+                    f"💵残り：{remain}円\n"
+                    f"📅残り日数：{remain_days}日\n"
+                    f"🪙1日あと：{per_day}円使える"
+                    f"{warning}"
                 )
             )
 
