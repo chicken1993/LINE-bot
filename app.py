@@ -973,6 +973,112 @@ def handle_text(event):
 
             return
 
+
+        # ======================
+        # 使い方
+        # ======================
+
+        if text == "使い方":
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    "使い方を説明するね👇\n\n"
+
+                    "・『予算』と入力\n"
+                    "→ 予算設定＆確認や取り消しができるよ\n\n"
+
+                    "・『1000 食費』を入力\n"
+                    "→ 支出登録ができるよ\n\n"
+
+                    "・『今月』と入力\n"
+                    "→ 今月の使用金額の確認や\n"
+                    "設定額に対しての残額を確認できるよ\n\n"
+
+                    "・『グラフ』と入力\n"
+                    "→ 円グラフを表示して何に\n"
+                    "一番使ってるか確認できるよ\n\n"
+
+                    "・『リセット』と入力\n"
+                    "→ 履歴削除ができるよ\n\n"
+
+                    "📸 レシート送信もOK\n"
+                    "レシート画像を送信してね！\n"
+                    "僕がレシートの画像を判断して\n"
+                    "入力金額を確認するよ🤖\n"
+                    "結構間違えるから修正をお願い\n"
+                    "することもあるよ💦\n\n"
+
+                    "⚠️ 無料プランのため\n"
+                    "初回返信は1分前後かかります。\n"
+                    "返信が来ない場合は、1分後再度\n"
+                    "同じメッセージを送信してください。"
+                )
+            )
+
+            return
+
+        # ======================
+        # 予算入力
+        # ======================
+
+        if re.fullmatch(r'\d{3,8}', text):
+
+            save_budget(
+                user_id,
+                int(text)
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    f"予算 {text}円 を設定したよ👍"
+                )
+            )
+
+            return
+
+        # 通常入力
+        match = re.match(
+            r'^(\d+)\s*(.+)$',
+            text
+        )
+
+        if match:
+
+            amount = int(match.group(1))
+
+            category = match.group(2)
+
+            save_expense(
+                user_id,
+                amount,
+                category
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    f"{category}:{amount}円 登録OK👍"
+                )
+            )
+
+            return
+
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                "入力例👇\n"
+                "1000 食費\n"
+                "今月\n"
+                "グラフ\n"
+                "予算\n"
+                "リセット\n"
+                "使い方\n"
+                "レシート送信📸"
+            )
+        )
+
         # 通常入力
         match = re.match(
             r'^(\d+)\s*(.+)$',
@@ -1109,6 +1215,7 @@ def handle_image(event):
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage("OCRエラー")
+
         )
 
 # ======================
