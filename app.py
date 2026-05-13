@@ -1,101 +1,37 @@
-# =========================================================
-# Flask + LINE Bot 家計簿アプリ
-# 超初心者向けコメント完全版
-# =========================================================
-
 # ======================
-# Flask関連
+# Flask / LINE Bot 家計簿（予算警告追加版）
 # ======================
 
-# Flask
-# → PythonでWebアプリを作るライブラリ
 from flask import Flask, request, send_file
-
-# ======================
-# LINE Bot SDK
-# ======================
-
-# LINE Bot操作用
 from linebot import LineBotApi, WebhookHandler
-
-# LINEメッセージ関連クラス
 from linebot.models import *
 
-# ======================
-# Python標準ライブラリ
-# ======================
-
-# defaultdict
-# → 存在しないキーでも自動で0を入れてくれる辞書
 from collections import defaultdict
-
-# 現在日時取得
 from datetime import datetime
-
-# カレンダー機能
 import calendar
-
-# os → ファイル操作
-# re → 正規表現
-# traceback → エラー表示
-# requests → API通信
 import os, re, traceback, requests
-
-# ======================
-# .env読み込み
-# ======================
-
-# .envファイルの内容を使えるようにする
 from dotenv import load_dotenv
-
-# .env読み込み実行
 load_dotenv()
 
-# ======================
-# PostgreSQL
-# ======================
-
-# PostgreSQL接続
 import psycopg2
-
-# DB接続プール
 from psycopg2.pool import SimpleConnectionPool
 
-# ======================
-# グラフ描画
-# ======================
-
 import matplotlib
-
-# Renderなどサーバー環境用設定
 matplotlib.use("Agg")
 
-# グラフ描画
 import matplotlib.pyplot as plt
-
-# フォント
 from matplotlib import font_manager
 
-# ======================
-# Google OCR
-# ======================
-
-# Google Vision API
 from google.cloud import vision
 
-# =========================================================
-# 日本語フォント設定
-# =========================================================
+# ======================
+# 日本語フォント
+# ======================
 
-# フォント情報を入れる変数
 font_prop = None
 
-# 現在のフォルダ取得
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
-)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# フォントファイル場所
 FONT_PATH = os.path.join(
     BASE_DIR,
     "fonts",
@@ -104,754 +40,648 @@ FONT_PATH = os.path.join(
 
 try:
 
-    # フォント存在確認
     if os.path.exists(FONT_PATH):
 
-        # matplotlibへ追加
-        font_manager.fontManager.addfont(
-            FONT_PATH
-        )
+        font_manager.fontManager.addfont(FONT_PATH)
 
-        # フォント読み込み
         font_prop = font_manager.FontProperties(
             fname=FONT_PATH
         )
 
-        # matplotlibへ設定
-        plt.rcParams["font.family"] = (
-            font_prop.get_name()
-        )
+        plt.rcParams["font.family"] = font_prop.get_name()
 
-        # マイナス文字化け防止
         plt.rcParams["axes.unicode_minus"] = False
 
         print("✅ 日本語フォントOK")
 
     else:
 
-        # フォント無い時
         plt.rcParams["font.family"] = "DejaVu Sans"
 
 except:
 
-    # エラー時
     plt.rcParams["font.family"] = "DejaVu Sans"
 
-# =========================================================
-# Flask初期化
-# =========================================================
+# ======================
+# Flask
+# ======================
 
-# Flaskアプリ作成
 app = Flask(__name__)
 
-# .envから取得
-CHANNEL_ACCESS_TOKEN = os.getenv(
-    "CHANNEL_ACCESS_TOKEN"
-)
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
+BASE_URL = os.getenv("BASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-CHANNEL_SECRET = os.getenv(
-    "CHANNEL_SECRET"
-)
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
 
-BASE_URL = os.getenv(
-    "BASE_URL"
-)
-
-DATABASE_URL = os.getenv(
-    "DATABASE_URL"
-)
-
-# LINE Bot API操作用
-line_bot_api = LineBotApi(
-    CHANNEL_ACCESS_TOKEN
-)
-
-# LINE Webhook受信用
-handler = WebhookHandler(
-    CHANNEL_SECRET
-)
-
-# DB接続プール
 pool = SimpleConnectionPool(
-
-    # 最小接続数
     1,
-
-    # 最大接続数
     10,
-
-    # DB URL
     dsn=DATABASE_URL,
-
-    # SSL接続
     sslmode="require"
 )
 
-# OCR月間上限
 OCR_LIMIT = 20
 
-# =========================================================
+# ======================
 # DB接続
-# =========================================================
+# ======================
 
-# DB接続取得
 def get_conn():
-
     return pool.getconn()
 
-# DB接続返却
 def put_conn(conn):
-
     pool.putconn(conn)
 
-# =========================================================
+# ======================
 # DB初期化
-# =========================================================
+# ======================
 
 def init_db():
 
-    # DB接続取得
     conn = get_conn()
-
-    # SQL実行用
     cur = conn.cursor()
 
-    # ======================
-    # 支出テーブル
-    # ======================
-
     cur.execute("""
-
         CREATE TABLE IF NOT EXISTS expenses (
-
-            # 自動ID
             id SERIAL PRIMARY KEY,
-
-            # LINEユーザーID
             user_id TEXT,
-
-            # 金額
             amount INTEGER,
-
-            # カテゴリ
             category TEXT,
-
-            # 登録日時
-            created_at TIMESTAMP
-            DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-
     """)
 
-    # ======================
-    # OCRログ
-    # ======================
-
     cur.execute("""
-
         CREATE TABLE IF NOT EXISTS ocr_logs (
-
             id SERIAL PRIMARY KEY,
-
             user_id TEXT,
-
-            created_at TIMESTAMP
-            DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-
     """)
 
-    # ======================
-    # 予算
-    # ======================
-
     cur.execute("""
-
         CREATE TABLE IF NOT EXISTS budgets (
-
-            # user_idを主キー
             user_id TEXT PRIMARY KEY,
-
-            # 予算金額
             amount INTEGER
         )
-
     """)
 
-    # 保存
     conn.commit()
 
-    # cursor終了
     cur.close()
-
-    # 接続返却
     put_conn(conn)
 
-# 起動時にDB作成
 init_db()
 
-# =========================================================
-# 支出保存
-# =========================================================
+# ======================
+# 保存
+# ======================
 
 def save_expense(user_id, amount, category):
 
-    # DB接続
     conn = get_conn()
-
-    # SQL実行用
     cur = conn.cursor()
 
-    # INSERT
     cur.execute("""
-
         INSERT INTO expenses (
-
             user_id,
             amount,
             category
-
         )
-
         VALUES (%s,%s,%s)
-
     """, (
-
         user_id,
         amount,
         category
-
     ))
 
-    # 保存
     conn.commit()
 
-    # 終了
     cur.close()
-
     put_conn(conn)
 
-# =========================================================
-# 最新データ削除
-# =========================================================
+# ======================
+# 最新削除
+# ======================
 
 def delete_latest(user_id):
 
     conn = get_conn()
     cur = conn.cursor()
 
-    # 一番新しいデータ削除
     cur.execute("""
-
         DELETE FROM expenses
-
         WHERE id = (
-
             SELECT id
-
             FROM expenses
-
             WHERE user_id=%s
-
             ORDER BY created_at DESC
-
             LIMIT 1
         )
-
     """, (user_id,))
 
     conn.commit()
 
     cur.close()
-
     put_conn(conn)
 
-# =========================================================
-# 今月全部削除
-# =========================================================
+# ======================
+# 今月削除
+# ======================
 
 def delete_month(user_id):
 
     conn = get_conn()
-
     cur = conn.cursor()
 
     cur.execute("""
-
         DELETE FROM expenses
-
         WHERE user_id=%s
-
         AND DATE_TRUNC('month', created_at)
-        =
-        DATE_TRUNC('month', CURRENT_DATE)
-
+            = DATE_TRUNC('month', CURRENT_DATE)
     """, (user_id,))
 
     conn.commit()
 
     cur.close()
-
     put_conn(conn)
 
-# =========================================================
-# 最近10件取得
-# =========================================================
+# ======================
+# 履歴10件取得
+# ======================
 
 def get_recent_expenses(user_id):
 
     conn = get_conn()
-
     cur = conn.cursor()
 
     cur.execute("""
-
         SELECT id, category, amount
-
         FROM expenses
-
         WHERE user_id=%s
-
         ORDER BY created_at DESC
-
         LIMIT 10
-
     """, (user_id,))
 
-    # データ取得
     rows = cur.fetchall()
 
     cur.close()
-
     put_conn(conn)
 
     return rows
 
-# =========================================================
-# ID指定削除
-# =========================================================
+# ======================
+# ID削除
+# ======================
 
 def delete_by_id(expense_id, user_id):
 
     conn = get_conn()
-
     cur = conn.cursor()
 
     cur.execute("""
-
         DELETE FROM expenses
-
         WHERE id=%s
-
         AND user_id=%s
-
     """, (
-
         expense_id,
         user_id
-
     ))
 
     conn.commit()
 
     cur.close()
-
     put_conn(conn)
 
-# =========================================================
+# ======================
 # 予算保存
-# =========================================================
+# ======================
 
 def save_budget(user_id, amount):
 
     conn = get_conn()
-
     cur = conn.cursor()
 
     cur.execute("""
-
         INSERT INTO budgets (
-
             user_id,
             amount
-
         )
-
         VALUES (%s,%s)
 
         ON CONFLICT (user_id)
-
         DO UPDATE SET amount=EXCLUDED.amount
-
     """, (
-
         user_id,
         amount
-
     ))
 
     conn.commit()
 
     cur.close()
-
     put_conn(conn)
 
-# =========================================================
+# ======================
 # 予算取得
-# =========================================================
+# ======================
 
 def get_budget(user_id):
 
     conn = get_conn()
-
     cur = conn.cursor()
 
     cur.execute("""
-
         SELECT amount
-
         FROM budgets
-
         WHERE user_id=%s
-
     """, (user_id,))
 
     row = cur.fetchone()
 
     cur.close()
-
     put_conn(conn)
 
-    # データ存在時
     if row:
-
         return row[0]
 
     return None
 
-# =========================================================
+# ======================
 # 予算削除
-# =========================================================
+# ======================
 
 def delete_budget(user_id):
 
     conn = get_conn()
-
     cur = conn.cursor()
 
     cur.execute("""
-
         DELETE FROM budgets
-
         WHERE user_id=%s
-
     """, (user_id,))
 
     conn.commit()
 
     cur.close()
-
     put_conn(conn)
 
-# =========================================================
-# OCR回数取得
-# =========================================================
+# ======================
+# OCR回数
+# ======================
 
 def get_monthly_ocr_count(user_id):
 
     conn = get_conn()
-
     cur = conn.cursor()
 
     cur.execute("""
-
         SELECT COUNT(*)
-
         FROM ocr_logs
-
         WHERE user_id=%s
-
         AND DATE_TRUNC('month', created_at)
-        =
-        DATE_TRUNC('month', CURRENT_DATE)
-
+            = DATE_TRUNC('month', CURRENT_DATE)
     """, (user_id,))
 
     count = cur.fetchone()[0]
 
     cur.close()
-
     put_conn(conn)
 
     return count
 
-# =========================================================
-# OCRログ保存
-# =========================================================
+# ======================
+# OCRログ
+# ======================
 
 def save_ocr_log(user_id):
 
     conn = get_conn()
-
     cur = conn.cursor()
 
     cur.execute("""
-
         INSERT INTO ocr_logs (user_id)
-
         VALUES (%s)
-
     """, (user_id,))
 
     conn.commit()
 
     cur.close()
-
     put_conn(conn)
 
-# =========================================================
-# 今月データ取得
-# =========================================================
+# ======================
+# 今月データ
+# ======================
 
 def get_month_data(user_id):
 
     conn = get_conn()
-
     cur = conn.cursor()
 
     cur.execute("""
-
         SELECT category, amount
-
         FROM expenses
-
         WHERE user_id=%s
-
         AND DATE_TRUNC('month', created_at)
-        =
-        DATE_TRUNC('month', CURRENT_DATE)
-
+            = DATE_TRUNC('month', CURRENT_DATE)
     """, (user_id,))
 
     rows = cur.fetchall()
 
     cur.close()
-
     put_conn(conn)
 
     return rows
 
-# =========================================================
-# 円グラフ作成
-# =========================================================
+# ======================
+# グラフ
+# ======================
 
 def create_graph(user_id):
 
-    # 今月データ取得
     rows = get_month_data(user_id)
 
-    # データ無し
     if not rows:
-
         return None
 
-    # カテゴリ別合計
     data = defaultdict(int)
 
-    # 集計
     for category, amount in rows:
-
         data[category] += amount
 
-    # ラベル
     labels = list(data.keys())
-
-    # 金額
     values = list(data.values())
 
-    # グラフサイズ
     plt.figure(figsize=(6,6))
 
-    # 円グラフ
     plt.pie(
-
         values,
-
         labels=labels,
-
         autopct="%1.1f%%"
     )
 
-    # タイトル
     plt.title("今月の支出")
 
-    # 保存ファイル名
     graph_path = "graph.png"
 
-    # 保存
     plt.savefig(graph_path)
 
-    # メモリ解放
     plt.close()
 
     return graph_path
 
-# =========================================================
+# ======================
 # OCR
-# =========================================================
+# ======================
 
 def detect_text_from_image(image_content):
 
-    # Google OCRクライアント
     client = vision.ImageAnnotatorClient()
 
-    # 画像作成
-    image = vision.Image(
-        content=image_content
-    )
+    image = vision.Image(content=image_content)
 
-    # OCR実行
-    response = client.text_detection(
-        image=image
-    )
+    response = client.text_detection(image=image)
 
-    # テキスト取得
     texts = response.text_annotations
 
-    # テキスト存在時
     if texts:
-
         return texts[0].description
 
     return ""
 
-# =========================================================
+# ======================
 # 金額抽出
-# =========================================================
+# ======================
 
 def extract_max_price(text):
 
-    # 2〜6桁数字抽出
-    numbers = re.findall(
-        r'\d{2,6}',
-        text
-    )
+    numbers = re.findall(r'\d{2,6}', text)
 
-    # 無ければNone
     if not numbers:
-
         return None
 
-    # 最大値返す
     return max(map(int, numbers))
 
-# =========================================================
+# ======================
 # callback
-# =========================================================
+# ======================
 
 @app.route("/callback", methods=["POST"])
-
 def callback():
 
-    # LINEから来たデータ
-    body = request.get_data(
-        as_text=True
-    )
+    body = request.get_data(as_text=True)
 
-    # 署名取得
     signature = request.headers.get(
         "X-Line-Signature"
     )
 
     try:
 
-        # LINEイベント処理
-        handler.handle(
-            body,
-            signature
-        )
+        handler.handle(body, signature)
 
     except:
 
-        # エラー表示
-        print(
-            traceback.format_exc()
-        )
+        print(traceback.format_exc())
 
     return "OK"
 
-# =========================================================
+# ======================
 # home
-# =========================================================
+# ======================
 
 @app.route("/")
-
 def home():
 
     return "OK"
 
-# =========================================================
-# graph画像表示
-# =========================================================
+
+@app.route("/weather")
+def send_weather():
+    try:
+
+        user_id = "Ucae4b4a79830d56a8bf4d63159763afd"
+
+        # ======================
+        # 天気コード変換
+        # ======================
+
+        def get_weather_text(code):
+
+            if code == 0:
+                return "晴れ"
+
+            elif code in [1, 2, 3]:
+                return "くもり"
+
+            elif code in [45, 48]:
+                return "霧"
+
+            elif code >= 51:
+                return "雨"
+
+            return "晴れ"
+
+        # ======================
+        # 都市ごとの取得
+        # ======================
+
+        def fetch_weather(city, latitude, longitude):
+
+            url = (
+                "https://api.open-meteo.com/v1/forecast"
+                f"?latitude={latitude}"
+                f"&longitude={longitude}"
+                "&daily=weathercode,"
+                "temperature_2m_max,"
+                "temperature_2m_min,"
+                "precipitation_probability_max"
+                "&hourly=weathercode"
+                "&timezone=Asia%2FTokyo"
+            )
+
+            response = requests.get(url)
+
+            data = response.json()
+
+            # 日別
+
+            max_temp = data["daily"][
+                "temperature_2m_max"
+            ][0]
+
+            min_temp = data["daily"][
+                "temperature_2m_min"
+            ][0]
+
+            rain = data["daily"][
+                "precipitation_probability_max"
+            ][0]
+
+            # hourly取得
+
+            hourly_codes = data["hourly"][
+                "weathercode"
+            ]
+
+            # 9時 = 午前
+            morning_code = hourly_codes[9]
+
+            # 15時 = 午後
+            afternoon_code = hourly_codes[15]
+
+            morning_weather = get_weather_text(
+                morning_code
+            )
+
+            afternoon_weather = get_weather_text(
+                afternoon_code
+            )
+
+            text = (
+                f"📍{city}\n"
+                f"午前：{morning_weather}\n"
+                f"午後：{afternoon_weather}\n"
+                f"最高：{max_temp}℃\n"
+                f"最低：{min_temp}℃\n"
+                f"降水確率：{rain}%"
+            )
+
+            if rain >= 50:
+
+                text += "\n☔ 傘推奨"
+
+            return text
+
+        # ======================
+        # 静岡市
+        # ======================
+
+        shizuoka = fetch_weather(
+            "静岡市",
+            34.9769,
+            138.3831
+        )
+
+        # ======================
+        # 沼津市
+        # ======================
+
+        numazu = fetch_weather(
+            "沼津市",
+            35.0956,
+            138.8635
+        )
+
+        # ======================
+        # LINE送信
+        # ======================
+
+        message = (
+            "☀️ 今日の天気\n\n"
+            f"{shizuoka}\n\n"
+            f"{numazu}"
+        )
+
+        line_bot_api.push_message(
+            user_id,
+            TextSendMessage(text=message)
+        )
+
+        return "weather sent"
+
+    except Exception as e:
+
+        print(traceback.format_exc())
+
+        return str(e)
+
+
+# ======================
+# graph
+# ======================
 
 @app.route("/graph.png")
-
 def graph():
 
     return send_file(
-
         "graph.png",
-
         mimetype="image/png"
     )
 
-# =========================================================
-# テキスト受信
-# =========================================================
+# ======================
+# テキスト
+# ======================
 
-@handler.add(
-    MessageEvent,
-    message=TextMessage
-)
-
+@handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
 
-    # メッセージ取得
     text = event.message.text.strip()
 
-    # ユーザーID取得
     user_id = event.source.user_id
+
 
     print("USER_ID:", user_id)
 
+
     try:
 
-        # =================================================
         # OCR登録
-        # =================================================
-
         if text.startswith("OK_"):
 
-            # OK_500 → 500取得
             amount = int(
                 text.split("_")[1]
             )
 
-            # DB保存
             save_expense(
-
                 user_id,
-
                 amount,
-
                 "レシート"
             )
 
-            # LINE返信
             line_bot_api.reply_message(
-
                 event.reply_token,
-
                 TextSendMessage(
                     f"{amount}円 登録したよ👍"
                 )
@@ -859,40 +689,50 @@ def handle_text(event):
 
             return
 
-        # =================================================
-        # 今月合計
-        # =================================================
+        # グラフ
+        if text == "グラフ":
 
-        if text == "今月":
+            graph_path = create_graph(user_id)
 
-            rows = get_month_data(user_id)
-
-            # データ無し
-            if not rows:
+            if not graph_path:
 
                 line_bot_api.reply_message(
-
                     event.reply_token,
-
-                    TextSendMessage(
-                        "今月データなし"
-                    )
+                    TextSendMessage("データなし")
                 )
 
                 return
 
-            # 合計計算
+            line_bot_api.reply_message(
+                event.reply_token,
+                ImageSendMessage(
+                    original_content_url=f"{BASE_URL}/graph.png",
+                    preview_image_url=f"{BASE_URL}/graph.png"
+                )
+            )
+
+            return
+
+        # 今月
+        if text == "今月":
+
+            rows = get_month_data(user_id)
+
+            if not rows:
+
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage("今月データなし")
+                )
+
+                return
+
             total = sum(
-
-                amount
-
-                for _, amount in rows
+                amount for _, amount in rows
             )
 
             line_bot_api.reply_message(
-
                 event.reply_token,
-
                 TextSendMessage(
                     f"今月合計：{total}円"
                 )
@@ -900,43 +740,470 @@ def handle_text(event):
 
             return
 
-        # =================================================
+        # ======================
+        # 予算メニュー
+        # ======================
+
+        if text == "予算":
+
+            buttons = TemplateSendMessage(
+                alt_text="予算メニュー",
+                template=ButtonsTemplate(
+                    title="予算メニュー",
+                    text="何をする？",
+                    actions=[
+
+                        MessageAction(
+                            label="予算を追加する",
+                            text="設定予算"
+                        ),
+
+                        MessageAction(
+                            label="予算の確認",
+                            text="予算確認"
+                        ),
+
+                        MessageAction(
+                            label="予算リセット",
+                            text="予算リセット"
+                        )
+                    ]
+                )
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                buttons
+            )
+
+            return
+
+        # ======================
+        # 予算設定開始
+        # ======================
+
+        if text == "設定予算":
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    "予算金額を入力してね👇\n"
+                    "例：50000"
+                )
+            )
+
+            return
+
+        # ======================
+        # 予算確認
+        # ======================
+
+        if text == "予算確認":
+
+            budget = get_budget(user_id)
+
+            if not budget:
+
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(
+                        "予算未設定だよ"
+                    )
+                )
+
+                return
+
+            rows = get_month_data(user_id)
+
+            total = sum(
+                amount for _, amount in rows
+            )
+
+            remain = budget - total
+
+            # ======================
+            # 残り日数
+            # ======================
+
+            now = datetime.now()
+
+            last_day = calendar.monthrange(
+                now.year,
+                now.month
+            )[1]
+
+            remain_days = last_day - now.day
+
+            if remain_days <= 0:
+                remain_days = 1
+
+            # ======================
+            # 1日使える金額
+            # ======================
+
+            per_day = int(remain / remain_days)
+
+            # ======================
+            # 超過警告
+            # ======================
+
+            warning = ""
+
+            if remain < 0:
+
+                warning = "\n⚠️予算オーバー"
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    f"💰今月予算：{budget}円\n"
+                    f"📉使用額：{total}円\n"
+                    f"💵残り：{remain}円\n"
+                    f"📅残り日数：{remain_days}日\n"
+                    f"🪙1日あと：{per_day}円使える"
+                    f"{warning}"
+                )
+            )
+
+            return
+
+        # ======================
+        # 予算リセット
+        # ======================
+
+        if text == "予算リセット":
+
+            delete_budget(user_id)
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    "予算リセットしたよ🗑️"
+                )
+            )
+
+            return
+
+        # ======================
+        # リセットメニュー
+        # ======================
+
+        if text == "リセット":
+
+            buttons = TemplateSendMessage(
+                alt_text="削除メニュー",
+                template=ButtonsTemplate(
+                    title="削除メニュー",
+                    text="どれを削除する？",
+                    actions=[
+
+                        MessageAction(
+                            label="直前の入力1件",
+                            text="削除_最新"
+                        ),
+
+                        MessageAction(
+                            label="履歴10件から選択",
+                            text="削除_履歴"
+                        ),
+
+                        MessageAction(
+                            label="今月データ全部",
+                            text="削除_今月"
+                        )
+                    ]
+                )
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                buttons
+            )
+
+            return
+
+        # 最新削除
+        if text == "削除_最新":
+
+            confirm = TemplateSendMessage(
+                alt_text="確認",
+                template=ConfirmTemplate(
+                    text="最新1件を削除する？",
+                    actions=[
+
+                        MessageAction(
+                            label="はい",
+                            text="実行_削除最新"
+                        ),
+
+                        MessageAction(
+                            label="いいえ",
+                            text="キャンセル"
+                        )
+                    ]
+                )
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                confirm
+            )
+
+            return
+
+        # 今月削除
+        if text == "削除_今月":
+
+            confirm = TemplateSendMessage(
+                alt_text="確認",
+                template=ConfirmTemplate(
+                    text="今月データ全部削除する？",
+                    actions=[
+
+                        MessageAction(
+                            label="はい",
+                            text="実行_削除今月"
+                        ),
+
+                        MessageAction(
+                            label="いいえ",
+                            text="キャンセル"
+                        )
+                    ]
+                )
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                confirm
+            )
+
+            return
+
+        # 履歴表示
+        if text == "削除_履歴":
+
+            rows = get_recent_expenses(user_id)
+
+            if not rows:
+
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage("履歴なし")
+                )
+
+                return
+
+            actions = []
+
+            for expense_id, category, amount in rows:
+
+                actions.append(
+                    MessageAction(
+                        label=f"{category}:{amount}円",
+                        text=f"確認削除_{expense_id}"
+                    )
+                )
+
+            buttons = TemplateSendMessage(
+                alt_text="履歴削除",
+                template=ButtonsTemplate(
+                    title="履歴10件",
+                    text="削除する項目を選んでね",
+                    actions=actions[:4]
+                )
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                buttons
+            )
+
+            return
+
+        # 履歴削除確認
+        if text.startswith("確認削除_"):
+
+            expense_id = text.split("_")[1]
+
+            confirm = TemplateSendMessage(
+                alt_text="確認",
+                template=ConfirmTemplate(
+                    text="この履歴を削除する？",
+                    actions=[
+
+                        MessageAction(
+                            label="はい",
+                            text=f"実行削除_{expense_id}"
+                        ),
+
+                        MessageAction(
+                            label="いいえ",
+                            text="キャンセル"
+                        )
+                    ]
+                )
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                confirm
+            )
+
+            return
+
+        # 履歴削除実行
+        if text.startswith("実行削除_"):
+
+            expense_id = text.split("_")[1]
+
+            delete_by_id(
+                expense_id,
+                user_id
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    "履歴削除したよ🗑️"
+                )
+            )
+
+            return
+
+        # 最新削除実行
+        if text == "実行_削除最新":
+
+            delete_latest(user_id)
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    "最新1件削除したよ🗑️"
+                )
+            )
+
+            return
+
+        # 今月削除実行
+        if text == "実行_削除今月":
+
+            delete_month(user_id)
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    "今月データ全部削除したよ🗑️"
+                )
+            )
+
+            return
+
+        # ======================
+        # 予算入力
+        # ======================
+
+        if re.fullmatch(r'\d{3,8}', text):
+
+            save_budget(
+                user_id,
+                int(text)
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    f"予算 {text}円 を設定したよ👍"
+                )
+            )
+
+            return
+
+
+        # ======================
+        # 使い方
+        # ======================
+
+        if text == "使い方":
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    "使い方を説明するね👇\n\n"
+
+                    "・『予算』と入力\n"
+                    "→ 予算設定＆確認や取り消しができるよ\n\n"
+
+                    "・『1000 食費』を入力\n"
+                    "→ 支出登録ができるよ\n\n"
+
+                    "・『今月』と入力\n"
+                    "→ 今月の使用金額の確認や\n"
+                    "設定額に対しての残額を確認できるよ\n\n"
+
+                    "・『グラフ』と入力\n"
+                    "→ 円グラフを表示して何に\n"
+                    "一番使ってるか確認できるよ\n\n"
+
+                    "・『リセット』と入力\n"
+                    "→ 履歴削除ができるよ\n\n"
+
+                    "📸 レシート送信もOK\n"
+                    "レシート画像を送信してね！\n"
+                    "僕がレシートの画像を判断して\n"
+                    "入力金額を確認するよ🤖\n"
+                    "結構間違えるから修正をお願い\n"
+                    "することもあるよ💦\n\n"
+
+                    "⚠️ 無料プランのため\n"
+                    "初回返信は1分前後かかります。\n"
+                    "返信が来ない場合は、1分後再度\n"
+                    "同じメッセージを送信してください。"
+                )
+            )
+
+            return
+
+        # ======================
+        # 予算入力
+        # ======================
+
+        if re.fullmatch(r'\d{3,8}', text):
+
+            save_budget(
+                user_id,
+                int(text)
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    f"予算 {text}円 を設定したよ👍"
+                )
+            )
+
+            return
+
         # 通常入力
-        # 例:
-        # 1000 食費
-        # =================================================
-
         match = re.match(
-
             r'^(\d+)\s*(.+)$',
-
             text
         )
 
         if match:
 
-            # 金額
-            amount = int(
-                match.group(1)
-            )
+            amount = int(match.group(1))
 
-            # カテゴリ
             category = match.group(2)
 
-            # DB保存
             save_expense(
-
                 user_id,
-
                 amount,
-
                 category
             )
 
             line_bot_api.reply_message(
-
                 event.reply_token,
-
                 TextSendMessage(
                     f"{category}:{amount}円 登録OK👍"
                 )
@@ -944,108 +1211,114 @@ def handle_text(event):
 
             return
 
-        # =================================================
-        # 不明入力
-        # =================================================
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(
+                "入力例👇\n"
+                "1000 食費\n"
+                "今月\n"
+                "グラフ\n"
+                "予算\n"
+                "リセット\n"
+                "使い方\n"
+                "レシート送信📸"
+            )
+        )
+
+        # 通常入力
+        match = re.match(
+            r'^(\d+)\s*(.+)$',
+            text
+        )
+
+        if match:
+
+            amount = int(match.group(1))
+
+            category = match.group(2)
+
+            save_expense(
+                user_id,
+                amount,
+                category
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    f"{category}:{amount}円 登録OK👍"
+                )
+            )
+
+            return
 
         line_bot_api.reply_message(
-
             event.reply_token,
-
             TextSendMessage(
-
                 "入力例👇\n"
-
                 "1000 食費\n"
-
                 "今月\n"
-
                 "グラフ\n"
-
                 "予算\n"
-
-                "リセット"
+                "リセット\n"
+                "レシート送信📸"
             )
         )
 
     except:
 
-        # エラー表示
         print(traceback.format_exc())
 
         line_bot_api.reply_message(
-
             event.reply_token,
-
             TextSendMessage("エラー")
         )
 
-# =========================================================
-# 画像受信
-# =========================================================
+# ======================
+# OCR画像
+# ======================
 
-@handler.add(
-    MessageEvent,
-    message=ImageMessage
-)
-
+@handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
 
-    # ユーザーID
     user_id = event.source.user_id
 
     try:
 
-        # OCR使用回数取得
         current_count = get_monthly_ocr_count(
             user_id
         )
 
-        # 上限チェック
         if current_count >= OCR_LIMIT:
 
             line_bot_api.reply_message(
-
                 event.reply_token,
-
                 TextSendMessage(
-
                     f"今月OCR上限😢\n"
-
                     f"月{OCR_LIMIT}回まで"
                 )
             )
 
             return
 
-        # 画像取得
-        message_content = (
-            line_bot_api.get_message_content(
-                event.message.id
-            )
+        message_content = line_bot_api.get_message_content(
+            event.message.id
         )
 
-        # バイナリ取得
         image_bytes = message_content.content
 
-        # OCR実行
         text = detect_text_from_image(
             image_bytes
         )
 
-        # OCRログ保存
         save_ocr_log(user_id)
 
-        # 金額抽出
         amount = extract_max_price(text)
 
-        # 金額無し
         if not amount:
 
             line_bot_api.reply_message(
-
                 event.reply_token,
-
                 TextSendMessage(
                     "金額読み取れなかった😢"
                 )
@@ -1053,47 +1326,31 @@ def handle_image(event):
 
             return
 
-        # 残り回数
         remain = OCR_LIMIT - (
             current_count + 1
         )
 
-        # 確認画面
         flex = TemplateSendMessage(
-
             alt_text="確認",
-
             template=ConfirmTemplate(
-
-                text=(
-                    f"{amount}円で登録する？\n"
-                    f"残り:{remain}回"
-                ),
-
+                text=f"{amount}円で登録する？\n残り:{remain}回",
                 actions=[
 
                     MessageAction(
-
                         label="はい",
-
                         text=f"OK_{amount}"
                     ),
 
                     MessageAction(
-
                         label="いいえ",
-
                         text="キャンセル"
                     )
                 ]
             )
         )
 
-        # LINE返信
         line_bot_api.reply_message(
-
             event.reply_token,
-
             flex
         )
 
@@ -1102,28 +1359,20 @@ def handle_image(event):
         print(traceback.format_exc())
 
         line_bot_api.reply_message(
-
             event.reply_token,
-
             TextSendMessage("OCRエラー")
+
         )
 
-# =========================================================
-# Flask起動
-# =========================================================
+# ======================
+# 起動
+# ======================
 
 if __name__ == "__main__":
 
     app.run(
-
-        # 外部アクセス許可
         host="0.0.0.0",
-
-        # Render用PORT
         port=int(
-            os.environ.get(
-                "PORT",
-                10000
-            )
+            os.environ.get("PORT", 10000)
         )
     )
