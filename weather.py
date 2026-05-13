@@ -1,9 +1,9 @@
-import os
-import requests
+# ======================
+# 全ユーザー天気通知（コピペ専用）
+# ======================
 
-CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
-
-USER_ID = "Ucae4b4a79830d56a8bf4d63159763afd"
+from linebot.models import TextSendMessage
+import traceback
 
 message = """
 ☀️ 天気通知テスト成功！
@@ -11,28 +11,22 @@ message = """
 毎朝通知できるよ👍
 """
 
-url = "https://api.line.me/v2/bot/message/push"
+try:
+    users = get_all_users()
 
-headers = {
-    "Content-Type": "application/json",
-    "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
-}
+    for user_id in users:
 
-data = {
-    "to": USER_ID,
-    "messages": [
-        {
-            "type": "text",
-            "text": message
-        }
-    ]
-}
+        try:
+            line_bot_api.push_message(
+                user_id,
+                TextSendMessage(text=message)
+            )
+            print(f"送信成功: {user_id}")
 
-response = requests.post(
-    url,
-    headers=headers,
-    json=data
-)
+        except Exception:
+            print(f"送信失敗: {user_id}")
+            print(traceback.format_exc())
 
-print(response.status_code)
-print(response.text)
+except Exception:
+    print("ユーザー取得エラー")
+    print(traceback.format_exc())
