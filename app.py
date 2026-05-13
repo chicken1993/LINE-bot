@@ -5,11 +5,11 @@
 from flask import Flask, request, send_file
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import *
-import os, re, traceback
+
 from collections import defaultdict
 from datetime import datetime
 import calendar
-
+import os, re, traceback, requests
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -504,10 +504,77 @@ def send_weather():
 
         user_id = "Ucae4b4a79830d56a8bf4d63159763afd"
 
-        message = (
-            "☀️ 天気通知テスト\n\n"
-            "毎朝自動送信できるよ👍"
+        # ======================
+        # 静岡
+        # ======================
+
+        latitude = 34.9769
+        longitude = 138.3831
+
+        url = (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={latitude}"
+            f"&longitude={longitude}"
+            "&daily=weathercode,"
+            "temperature_2m_max,"
+            "temperature_2m_min,"
+            "precipitation_probability_max"
+            "&timezone=Asia%2FTokyo"
         )
+
+        response = requests.get(url)
+
+        data = response.json()
+
+        max_temp = data["daily"][
+            "temperature_2m_max"
+        ][0]
+
+        min_temp = data["daily"][
+            "temperature_2m_min"
+        ][0]
+
+        rain = data["daily"][
+            "precipitation_probability_max"
+        ][0]
+
+        weather_code = data["daily"][
+            "weathercode"
+        ][0]
+
+        # ======================
+        # 天気コード
+        # ======================
+
+        weather_text = "晴れ"
+
+        if weather_code in [1, 2, 3]:
+
+            weather_text = "くもり"
+
+        elif weather_code in [45, 48]:
+
+            weather_text = "霧"
+
+        elif weather_code >= 51:
+
+            weather_text = "雨"
+
+        message = (
+            "☀️ 今日の静岡の天気\n\n"
+            f"天気：{weather_text}\n"
+            f"最高気温：{max_temp}℃\n"
+            f"最低気温：{min_temp}℃\n"
+            f"降水確率：{rain}%"
+        )
+
+        # 雨の日
+
+        if rain >= 50:
+
+            message += (
+                "\n\n☔ 傘を持っていこう！"
+            )
 
         line_bot_api.push_message(
             user_id,
@@ -521,6 +588,7 @@ def send_weather():
         print(traceback.format_exc())
 
         return str(e)
+
 
 # ======================
 # graph
