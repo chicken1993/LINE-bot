@@ -1,13 +1,21 @@
+import os
 import requests
 
-LINE_CHANNEL_ACCESS_TOKEN = "ここにLINEのチャネルトークン"
-USER_ID = "ここにあなたのUSER_ID"
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
+
+USER_ID = "Ucae4b4a79830d56a8bf4d63159763afd"
+
+message = """
+☀️ 天気通知テスト成功！
+
+毎朝通知できるよ👍
+"""
 
 url = "https://api.line.me/v2/bot/message/push"
 
 headers = {
     "Content-Type": "application/json",
-    "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+    "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
 }
 
 data = {
@@ -15,12 +23,16 @@ data = {
     "messages": [
         {
             "type": "text",
-            "text": "☀️ 天気通知テスト成功！"
+            "text": message
         }
     ]
 }
 
-response = requests.post(url, headers=headers, json=data)
+response = requests.post(
+    url,
+    headers=headers,
+    json=data
+)
 
 print(response.status_code)
 print(response.text)
