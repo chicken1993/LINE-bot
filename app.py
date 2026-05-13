@@ -238,6 +238,12 @@ def fetch_weather(city, lat, lon):
 def home():
     return "OK"
 
+@app.route("/debug_users")
+def debug_users():
+    users = get_all_users()
+    return {"users": users}
+
+
 @app.route("/weather")
 def send_weather():
 
