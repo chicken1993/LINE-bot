@@ -519,6 +519,10 @@ def handle_text(event):
 
     user_id = event.source.user_id
 
+
+    print("USER_ID:", user_id)
+
+
     try:
 
         # OCR登録
