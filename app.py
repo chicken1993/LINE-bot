@@ -496,6 +496,32 @@ def home():
 
     return "OK"
 
+
+@app.route("/weather")
+def send_weather():
+
+    try:
+
+        user_id = "Ucae4b4a79830d56a8bf4d63159763afd"
+
+        message = (
+            "☀️ 天気通知テスト\n\n"
+            "毎朝自動送信できるよ👍"
+        )
+
+        line_bot_api.push_message(
+            user_id,
+            TextSendMessage(text=message)
+        )
+
+        return "weather sent"
+
+    except Exception as e:
+
+        print(traceback.format_exc())
+
+        return str(e)
+
 # ======================
 # graph
 # ======================
