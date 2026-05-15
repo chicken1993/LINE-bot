@@ -596,8 +596,8 @@ def callback():
 
 @app.route("/")
 def home():
-
-    return "OK"
+    return "OK", 200
+    
 
 # ======================
 # graph
@@ -713,6 +713,53 @@ def handle_text(event):
                 event.reply_token,
                 TextSendMessage(
                     text=f"今月合計：{total}円"
+                )
+            )
+
+            return
+
+
+        # ======================
+        # 使い方
+        # ======================
+
+        if text == "使い方":
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text=(
+                        "使い方を説明するね👇\n\n"
+
+                        "・『予算』と入力\n"
+                        "→ 予算設定＆確認や取り消しができるよ\n\n"
+
+                        "・『1000 食費』を入力\n"
+                        "→ 支出登録ができるよ\n\n"
+
+                        "・『今月』と入力\n"
+                        "→ 今月の使用金額の確認や\n"
+                        "設定額に対しての残額を確認できるよ\n\n"
+
+                        "・『グラフ』と入力\n"
+                        "→ 円グラフを表示して何に\n"
+                        "一番使ってるか確認できるよ\n\n"
+
+                        "・『リセット』と入力\n"
+                        "→ 履歴削除ができるよ\n\n"
+
+                        "📸 レシート送信もOK\n"
+                        "レシート画像を送信してね！\n"
+                        "僕がレシートの画像を判断して\n"
+                        "入力金額を確認するよ🤖\n"
+                        "結構間違えるから修正をお願い\n"
+                        "することもあるよ💦\n\n"
+
+                        "⚠️ 無料プランのため\n"
+                        "初回返信は1分前後かかります。\n"
+                        "返信が来ない場合は、1分後再度\n"
+                        "同じメッセージを送信してください。"
+                    )
                 )
             )
 
@@ -938,7 +985,7 @@ def handle_text(event):
 
             return
 
-        # 通常入力
+                # 通常入力
         match = re.match(
             r'^(\d+)\s*(.+)$',
             text
@@ -964,16 +1011,13 @@ def handle_text(event):
 
             return
 
+        # 未対応入力
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(
                 text=(
-                    "入力例👇\n"
-                    "1000 食費\n"
-                    "今月\n"
-                    "グラフ\n"
-                    "リセット\n"
-                    "レシート送信📸"
+                    "対応してない入力だよ😢\n\n"
+                    "『使い方』と入力してね！"
                 )
             )
         )
@@ -986,7 +1030,6 @@ def handle_text(event):
             event.reply_token,
             TextSendMessage("エラー")
         )
-
 # ======================
 # OCR画像
 # ======================
