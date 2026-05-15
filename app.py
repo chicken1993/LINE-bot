@@ -542,45 +542,41 @@ def get_weather_text(code):
 def fetch_weather(city, lat, lon):
 
     url = (
-        "https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}&longitude={lon}"
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={lat}&longitude={lon}"
         "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max"
         "&hourly=temperature_2m,precipitation_probability,weathercode"
         "&timezone=Asia%2FTokyo"
     )
 
+    data = requests.get(url, timeout=5).json()
 
-data = requests.get(url, timeout=5).json()
+    daily = data.get("daily", {})
+    hourly = data.get("hourly", {})
 
-daily = data.get("daily", {})
-hourly = data.get("hourly", {})
+    max_list = daily.get("temperature_2m_max")
+    min_list = daily.get("temperature_2m_min")
+    rain_list = daily.get("precipitation_probability_max")
 
-max_list = daily.get("temperature_2m_max")
-min_list = daily.get("temperature_2m_min")
-rain_list = daily.get("precipitation_probability_max")
+    h_t = hourly.get("temperature_2m")
+    h_c = hourly.get("weathercode")
 
-h_t = hourly.get("temperature_2m")
-h_c = hourly.get("weathercode")
+    if not all([max_list, min_list, rain_list, h_t, h_c]):
+        return f"天気APIエラー\n{data}"
 
-if not all([max_list, min_list, rain_list, h_t, h_c]):
-    return f"天気APIエラー\n{data}"
+    max_t = max_list[0]
+    min_t = min_list[0]
+    rain = rain_list[0]
 
-max_t = max_list[0]
-min_t = min_list[0]
-rain = rain_list[0]
-
-return (
-    f"📍{city}\n"
-    f"午前：{get_weather_text(h_c[9])} / {h_t[9]}℃\n"
-    f"午後：{get_weather_text(h_c[15])} / {h_t[15]}℃\n"
-    f"最高：{max_t}℃\n"
-    f"最低：{min_t}℃\n"
-    f"降水確率：{rain}%"
-    + ("\n☔ 傘必要" if rain >= 50 else "")
-)
-
-
-
+    return (
+        f"📍{city}\n"
+        f"午前：{get_weather_text(h_c[9])} / {h_t[9]}℃\n"
+        f"午後：{get_weather_text(h_c[15])} / {h_t[15]}℃\n"
+        f"最高：{max_t}℃\n"
+        f"最低：{min_t}℃\n"
+        f"降水確率：{rain}%"
+        + ("\n☔ 傘必要" if rain >= 50 else "")
+    )
 
 
 
