@@ -549,23 +549,40 @@ def fetch_weather(city, lat, lon):
         "&timezone=Asia%2FTokyo"
     )
 
-    data = requests.get(url, timeout=5).json()
 
-    max_t = data["daily"]["temperature_2m_max"][0]
-    min_t = data["daily"]["temperature_2m_min"][0]
-    rain = data["daily"]["precipitation_probability_max"][0]
+data = requests.get(url, timeout=5).json()
 
-    h_t = data["hourly"]["temperature_2m"]
-    h_c = data["hourly"]["weathercode"]
+daily = data.get("daily", {})
+hourly = data.get("hourly", {})
 
-    return (
-        f"📍{city}\n"
-        f"午前：{get_weather_text(h_c[9])} / {h_t[9]}℃\n"
-        f"午後：{get_weather_text(h_c[15])} / {h_t[15]}℃\n"
-        f"最高：{max_t}℃ 最低：{min_t}℃\n"
-        f"降水：{rain}%"
-        + ("\n☔ 傘必要" if rain >= 50 else "")
-    )
+max_list = daily.get("temperature_2m_max")
+min_list = daily.get("temperature_2m_min")
+rain_list = daily.get("precipitation_probability_max")
+
+h_t = hourly.get("temperature_2m")
+h_c = hourly.get("weathercode")
+
+if not all([max_list, min_list, rain_list, h_t, h_c]):
+    return f"天気APIエラー\n{data}"
+
+max_t = max_list[0]
+min_t = min_list[0]
+rain = rain_list[0]
+
+return (
+    f"📍{city}\n"
+    f"午前：{get_weather_text(h_c[9])} / {h_t[9]}℃\n"
+    f"午後：{get_weather_text(h_c[15])} / {h_t[15]}℃\n"
+    f"最高：{max_t}℃\n"
+    f"最低：{min_t}℃\n"
+    f"降水確率：{rain}%"
+    + ("\n☔ 傘必要" if rain >= 50 else "")
+)
+
+
+
+
+
 
 # ======================
 # callback
