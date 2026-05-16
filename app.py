@@ -26,42 +26,6 @@ matplotlib.use("Agg")
 
 from google.cloud import vision
 
-# ======================
-# 日本語フォント
-# ======================
-
-font_prop = None
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-FONT_PATH = os.path.join(
-    BASE_DIR,
-    "fonts",
-    "ipaexg.ttf"
-)
-
-try:
-
-    if os.path.exists(FONT_PATH):
-
-        font_manager.fontManager.addfont(FONT_PATH)
-
-        font_prop = font_manager.FontProperties(
-            fname=FONT_PATH
-        )
-
-        plt.rcParams["font.family"] = font_prop.get_name()
-        plt.rcParams["axes.unicode_minus"] = False
-
-        print("✅ 日本語フォントOK")
-
-    else:
-
-        plt.rcParams["font.family"] = "DejaVu Sans"
-
-except:
-
-    plt.rcParams["font.family"] = "DejaVu Sans"
 
 # ======================
 # Flask
