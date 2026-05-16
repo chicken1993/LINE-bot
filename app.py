@@ -1,5 +1,5 @@
 # =====================================================
-# LINE 家計簿Bot 完全版（Render安定 + PDF + グラフ + 天気）
+# LINE 家計簿Bot 完全版（Render安定 + PDF + グラフ + 天気 + 朝通知）
 # =====================================================
 
 from flask import Flask, request, send_file
@@ -38,7 +38,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 
 # ======================
-# matplotlib（日本語フォント）
+# matplotlib
 # ======================
 import matplotlib
 matplotlib.use("Agg")
@@ -46,7 +46,6 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 FONT_PATH = os.path.join(BASE_DIR, "ipaexg.ttf")
 
 if os.path.exists(FONT_PATH):
@@ -76,14 +75,28 @@ pool = SimpleConnectionPool(1, 10, dsn=DATABASE_URL, sslmode="require")
 
 
 # ======================
-# 天気
+# 天気（今いる場所ベース）
 # ======================
 def get_weather():
     try:
-        url = "https://wttr.in/Tokyo?format=3"
-        return requests.get(url, timeout=5).text
+        url = "https://wttr.in/?format=3"
+        return requests.get(url, timeout=5).text.strip()
     except:
         return "天気取得失敗"
+
+
+# ======================
+# PUSH通知（🔥追加）
+# ======================
+def push_weather(user_id):
+    try:
+        weather = get_weather()
+        line_bot_api.push_message(
+            user_id,
+            TextSendMessage(text=f"🌅 朝の天気\n{weather}")
+        )
+    except:
+        print("push失敗")
 
 
 # ======================
@@ -128,7 +141,26 @@ init_db()
 
 
 # ======================
-# 保存
+# ユーザー登録
+# ======================
+@handler.add(FollowEvent)
+def follow(event):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO users (user_id)
+        VALUES (%s)
+        ON CONFLICT DO NOTHING
+        """, (event.source.user_id,))
+        conn.commit()
+    finally:
+        cur.close()
+        put_conn(conn)
+
+
+# ======================
+# データ保存
 # ======================
 def save_expense(user_id, amount, category):
     conn = get_conn()
@@ -145,7 +177,7 @@ def save_expense(user_id, amount, category):
 
 
 # ======================
-# データ
+# データ取得
 # ======================
 def get_month_data(user_id):
     conn = get_conn()
@@ -187,7 +219,6 @@ def get_month_detail(user_id):
 # ======================
 def build_statement(user_id):
     rows = get_month_detail(user_id)
-
     if not rows:
         return "今月データなし"
 
@@ -216,7 +247,6 @@ def build_statement(user_id):
 # グラフ
 # ======================
 def create_graph(user_id):
-
     rows = get_month_data(user_id)
     if not rows:
         return None
@@ -240,15 +270,13 @@ def create_graph(user_id):
 
 
 # ======================
-# PDF（🔥ここが修正ポイント）
+# PDF
 # ======================
 def create_pdf(user_id):
-
     rows = get_month_detail(user_id)
     if not rows:
         return None
 
-    # 👉 安定化：フォルダ固定
     os.makedirs("reports", exist_ok=True)
 
     path = f"reports/report_{user_id}.pdf"
@@ -265,7 +293,6 @@ def create_pdf(user_id):
     for amount, category, created_at in rows:
         line = f"{created_at.strftime('%m/%d')} {category} {amount}円"
         c.drawString(50, y, line)
-
         y -= 20
         total += amount
 
@@ -277,27 +304,11 @@ def create_pdf(user_id):
     c.drawString(50, y, f"合計: {total}円")
 
     c.save()
-
     return path
 
 
 # ======================
-# OCR
-# ======================
-def detect_text(img):
-    client = vision.ImageAnnotatorClient()
-    image = vision.Image(content=img)
-    res = client.text_detection(image=image)
-    return res.text_annotations[0].description if res.text_annotations else ""
-
-
-def extract_price(text):
-    nums = re.findall(r'\d{2,6}', text)
-    return max(map(int, nums)) if nums else None
-
-
-# ======================
-# LINE callback
+# LINE webhook
 # ======================
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -313,7 +324,7 @@ def callback():
 
 
 # ======================
-# TEXT
+# TEXT処理
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
@@ -346,7 +357,6 @@ def handle_text(event):
 
     if text == "PDF出力":
         path = create_pdf(user_id)
-
         if not path:
             line_bot_api.reply_message(
                 event.reply_token,
@@ -354,7 +364,6 @@ def handle_text(event):
             )
             return
 
-        # 🔥ここ重要：ルートと一致
         url = f"{BASE_URL}/report/{user_id}.pdf"
 
         line_bot_api.reply_message(
@@ -362,6 +371,27 @@ def handle_text(event):
             TextSendMessage(f"PDFできた👇\n{url}")
         )
         return
+
+
+# ======================
+# cron用（🔥追加）
+# ======================
+@app.route("/cron/weather", methods=["GET"])
+def cron_weather():
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM users")
+        users = cur.fetchall()
+
+        for (user_id,) in users:
+            push_weather(user_id)
+
+        return "OK", 200
+    finally:
+        cur.close()
+        put_conn(conn)
 
 
 # ======================
