@@ -23,8 +23,6 @@ from psycopg2.pool import SimpleConnectionPool
 import matplotlib
 matplotlib.use("Agg")
 
-import matplotlib.pyplot as plt
-from matplotlib import font_manager
 
 from google.cloud import vision
 
@@ -437,6 +435,20 @@ def get_month_data(user_id):
 
 def create_graph(user_id):
 
+    import matplotlib.pyplot as plt
+    from matplotlib import font_manager
+
+    if os.path.exists(FONT_PATH):
+
+        font_manager.fontManager.addfont(FONT_PATH)
+
+        font_prop = font_manager.FontProperties(
+            fname=FONT_PATH
+        )
+
+        plt.rcParams["font.family"] = font_prop.get_name()
+        plt.rcParams["axes.unicode_minus"] = False
+
     rows = get_month_data(user_id)
 
     if not rows:
@@ -467,6 +479,7 @@ def create_graph(user_id):
     plt.close()
 
     return graph_path
+
 
 # ======================
 # OCR
