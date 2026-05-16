@@ -562,7 +562,8 @@ def fetch_weather(city, lat, lon):
     h_c = hourly.get("weathercode")
 
     if not all([max_list, min_list, rain_list, h_t, h_c]):
-        return f"天気APIエラー\n{data}"
+        return "⚠️ 天気情報を取得できません"
+
 
     max_t = max_list[0]
     min_t = min_list[0]
