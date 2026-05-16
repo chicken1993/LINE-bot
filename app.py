@@ -1,4 +1,4 @@
-# =====================================================
+\# =====================================================
 # LINE 家計簿Bot 完全版（Render安定 + PDF + グラフ + 天気）
 # =====================================================
 
@@ -38,7 +38,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 
 # ======================
-# matplotlib（日本語フォント固定）
+# matplotlib（日本語フォント）
 # ======================
 import matplotlib
 matplotlib.use("Agg")
@@ -47,7 +47,6 @@ from matplotlib import font_manager
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ★フォント（ルート or fontsどちらでもOK）
 FONT_PATH = os.path.join(BASE_DIR, "ipaexg.ttf")
 
 if os.path.exists(FONT_PATH):
@@ -58,6 +57,7 @@ else:
     plt.rcParams["font.family"] = "DejaVu Sans"
 
 plt.rcParams["axes.unicode_minus"] = False
+
 
 # ======================
 # Flask
@@ -145,7 +145,7 @@ def save_expense(user_id, amount, category):
 
 
 # ======================
-# 今月データ
+# データ
 # ======================
 def get_month_data(user_id):
     conn = get_conn()
@@ -213,7 +213,7 @@ def build_statement(user_id):
 
 
 # ======================
-# グラフ（日本語OK + yyyy/mm）
+# グラフ
 # ======================
 def create_graph(user_id):
 
@@ -240,7 +240,7 @@ def create_graph(user_id):
 
 
 # ======================
-# PDF
+# PDF（🔥ここが修正ポイント）
 # ======================
 def create_pdf(user_id):
 
@@ -248,7 +248,10 @@ def create_pdf(user_id):
     if not rows:
         return None
 
-    path = f"report_{user_id}.pdf"
+    # 👉 安定化：フォルダ固定
+    os.makedirs("reports", exist_ok=True)
+
+    path = f"reports/report_{user_id}.pdf"
     c = canvas.Canvas(path, pagesize=A4)
 
     y = 800
@@ -262,6 +265,7 @@ def create_pdf(user_id):
     for amount, category, created_at in rows:
         line = f"{created_at.strftime('%m/%d')} {category} {amount}円"
         c.drawString(50, y, line)
+
         y -= 20
         total += amount
 
@@ -273,6 +277,7 @@ def create_pdf(user_id):
     c.drawString(50, y, f"合計: {total}円")
 
     c.save()
+
     return path
 
 
@@ -291,17 +296,6 @@ def extract_price(text):
     return max(map(int, nums)) if nums else None
 
 
-def extract_store(text):
-    for line in text.split("\n"):
-        if "TEL" in line:
-            continue
-        if "合計" in line:
-            continue
-        if len(line) > 3:
-            return line
-    return "不明"
-
-
 # ======================
 # LINE callback
 # ======================
@@ -316,25 +310,6 @@ def callback():
         print(traceback.format_exc())
 
     return "OK"
-
-
-# ======================
-# FOLLOW
-# ======================
-@handler.add(FollowEvent)
-def follow(event):
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-        INSERT INTO users (user_id)
-        VALUES (%s)
-        ON CONFLICT DO NOTHING
-        """, (event.source.user_id,))
-        conn.commit()
-    finally:
-        cur.close()
-        put_conn(conn)
 
 
 # ======================
@@ -365,28 +340,13 @@ def handle_text(event):
     if text == "集計":
         line_bot_api.reply_message(
             event.reply_token,
-            TemplateSendMessage(
-                alt_text="選択",
-                template=ConfirmTemplate(
-                    text="どっちで見る？",
-                    actions=[
-                        MessageAction(label="明細", text="明細表示"),
-                        MessageAction(label="PDF", text="PDF出力")
-                    ]
-                )
-            )
-        )
-        return
-
-    if text == "明細表示":
-        line_bot_api.reply_message(
-            event.reply_token,
             TextSendMessage(build_statement(user_id))
         )
         return
 
     if text == "PDF出力":
         path = create_pdf(user_id)
+
         if not path:
             line_bot_api.reply_message(
                 event.reply_token,
@@ -394,87 +354,14 @@ def handle_text(event):
             )
             return
 
-        url = f"{BASE_URL}/{path}"
+        # 🔥ここ重要：ルートと一致
+        url = f"{BASE_URL}/report/{user_id}.pdf"
+
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(f"PDFできた👇\n{url}")
         )
         return
-
-    if text == "グラフ":
-        path = create_graph(user_id)
-        if not path:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("データなし")
-            )
-            return
-
-        url = f"{BASE_URL}/graph/{user_id}.png"
-        line_bot_api.reply_message(
-            event.reply_token,
-            ImageSendMessage(original_content_url=url, preview_image_url=url)
-        )
-        return
-
-    match = re.match(r'^(\d+)\s*(.+)$', text)
-
-    if match:
-        save_expense(user_id, int(match.group(1)), match.group(2))
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage("登録OK👍")
-        )
-        return
-
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage("『1000 食費』で入力")
-    )
-
-
-# ======================
-# IMAGE OCR
-# ======================
-@handler.add(MessageEvent, message=ImageMessage)
-def handle_image(event):
-
-    user_id = event.source.user_id
-
-    try:
-        msg = line_bot_api.get_message_content(event.message.id)
-        img = msg.content
-
-        text = detect_text(img)
-        amount = extract_price(text)
-
-        if not amount:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage("読み取れない")
-            )
-            return
-
-        line_bot_api.reply_message(
-            event.reply_token,
-            TemplateSendMessage(
-                alt_text="確認",
-                template=ConfirmTemplate(
-                    text=f"{amount}円で登録？",
-                    actions=[
-                        MessageAction(label="はい", text=f"OK_{amount}"),
-                        MessageAction(label="いいえ", text="キャンセル")
-                    ]
-                )
-            )
-        )
-
-    except:
-        print(traceback.format_exc())
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage("OCRエラー")
-        )
 
 
 # ======================
@@ -492,7 +379,10 @@ def graph(user_id):
 
 @app.route("/report/<user_id>.pdf")
 def report(user_id):
-    return send_file(f"report_{user_id}.pdf", mimetype="application/pdf")
+    return send_file(
+        f"reports/report_{user_id}.pdf",
+        mimetype="application/pdf"
+    )
 
 
 # ======================
