@@ -15,6 +15,11 @@ import requests
 
 from collections import defaultdict
 
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
+
+
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -438,6 +443,10 @@ def create_graph(user_id):
 
     import matplotlib.pyplot as plt
     from matplotlib import font_manager
+
+
+    import matplotlib
+    matplotlib.use("Agg")
 
     if os.path.exists(FONT_PATH):
 
