@@ -1,5 +1,5 @@
 # =====================================================
-# LINE 家計簿Bot 完全版（軽量＋天気＋PDF＋グラフ）
+# LINE 家計簿Bot 完全版（Render安定 + PDF + グラフ + 天気）
 # =====================================================
 
 from flask import Flask, request, send_file
@@ -38,6 +38,28 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 
 # ======================
+# matplotlib（日本語フォント固定）
+# ======================
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ★フォント（ルート or fontsどちらでもOK）
+FONT_PATH = os.path.join(BASE_DIR, "ipaexg.ttf")
+
+if os.path.exists(FONT_PATH):
+    font_manager.fontManager.addfont(FONT_PATH)
+    font_prop = font_manager.FontProperties(fname=FONT_PATH)
+    plt.rcParams["font.family"] = font_prop.get_name()
+else:
+    plt.rcParams["font.family"] = "DejaVu Sans"
+
+plt.rcParams["axes.unicode_minus"] = False
+
+# ======================
 # Flask
 # ======================
 app = Flask(__name__)
@@ -52,7 +74,6 @@ handler = WebhookHandler(CHANNEL_SECRET)
 
 pool = SimpleConnectionPool(1, 10, dsn=DATABASE_URL, sslmode="require")
 
-OCR_LIMIT = 20
 
 # ======================
 # 天気
@@ -64,6 +85,7 @@ def get_weather():
     except:
         return "天気取得失敗"
 
+
 # ======================
 # DB
 # ======================
@@ -72,6 +94,7 @@ def get_conn():
 
 def put_conn(conn):
     pool.putconn(conn)
+
 
 def init_db():
     conn = get_conn()
@@ -96,14 +119,16 @@ def init_db():
         """)
 
         conn.commit()
+
     finally:
         cur.close()
         put_conn(conn)
 
 init_db()
 
+
 # ======================
-# 支出保存
+# 保存
 # ======================
 def save_expense(user_id, amount, category):
     conn = get_conn()
@@ -117,6 +142,7 @@ def save_expense(user_id, amount, category):
     finally:
         cur.close()
         put_conn(conn)
+
 
 # ======================
 # 今月データ
@@ -137,6 +163,7 @@ def get_month_data(user_id):
         cur.close()
         put_conn(conn)
 
+
 def get_month_detail(user_id):
     conn = get_conn()
     try:
@@ -154,18 +181,20 @@ def get_month_detail(user_id):
         cur.close()
         put_conn(conn)
 
+
 # ======================
 # 明細
 # ======================
 def build_statement(user_id):
     rows = get_month_detail(user_id)
+
     if not rows:
         return "今月データなし"
 
     total = sum(r[0] for r in rows)
-
-    lines = ["📄 今月の明細書", "----------------"]
     cat = defaultdict(int)
+
+    lines = ["📄 今月の明細", "----------------"]
 
     for amount, category, created_at in rows:
         lines.append(f"{created_at.strftime('%m/%d')} | {category} | {amount}円")
@@ -182,13 +211,11 @@ def build_statement(user_id):
 
     return "\n".join(lines)
 
+
 # ======================
-# グラフ（軽量）
+# グラフ（日本語OK + yyyy/mm）
 # ======================
 def create_graph(user_id):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     rows = get_month_data(user_id)
     if not rows:
@@ -199,9 +226,11 @@ def create_graph(user_id):
     for c, a in rows:
         data[c] += a
 
+    month_label = datetime.now().strftime("%Y/%m")
+
     plt.figure(figsize=(6, 6))
     plt.pie(list(data.values()), labels=list(data.keys()), autopct="%1.1f%%")
-    plt.title("今月の支出")
+    plt.title(f"{month_label} 支出")
 
     path = f"graph_{user_id}.png"
     plt.savefig(path)
@@ -209,10 +238,12 @@ def create_graph(user_id):
 
     return path
 
+
 # ======================
-# PDF生成
+# PDF
 # ======================
 def create_pdf(user_id):
+
     rows = get_month_detail(user_id)
     if not rows:
         return None
@@ -223,7 +254,9 @@ def create_pdf(user_id):
     y = 800
     total = 0
 
-    c.drawString(50, y, "今月の明細")
+    month_label = datetime.now().strftime("%Y/%m")
+
+    c.drawString(50, y, f"{month_label} 明細")
     y -= 40
 
     for amount, category, created_at in rows:
@@ -242,6 +275,7 @@ def create_pdf(user_id):
     c.save()
     return path
 
+
 # ======================
 # OCR
 # ======================
@@ -251,9 +285,11 @@ def detect_text(img):
     res = client.text_detection(image=image)
     return res.text_annotations[0].description if res.text_annotations else ""
 
+
 def extract_price(text):
     nums = re.findall(r'\d{2,6}', text)
     return max(map(int, nums)) if nums else None
+
 
 def extract_store(text):
     for line in text.split("\n"):
@@ -265,8 +301,9 @@ def extract_store(text):
             return line
     return "不明"
 
+
 # ======================
-# CALLBACK
+# LINE callback
 # ======================
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -279,6 +316,7 @@ def callback():
         print(traceback.format_exc())
 
     return "OK"
+
 
 # ======================
 # FOLLOW
@@ -298,6 +336,7 @@ def follow(event):
         cur.close()
         put_conn(conn)
 
+
 # ======================
 # TEXT
 # ======================
@@ -307,7 +346,6 @@ def handle_text(event):
     text = event.message.text.strip()
     user_id = event.source.user_id
 
-    # 天気
     if text == "天気":
         line_bot_api.reply_message(
             event.reply_token,
@@ -315,7 +353,6 @@ def handle_text(event):
         )
         return
 
-    # 今月
     if text == "今月":
         rows = get_month_data(user_id)
         total = sum(a for _, a in rows)
@@ -325,7 +362,6 @@ def handle_text(event):
         )
         return
 
-    # 明細
     if text == "集計":
         line_bot_api.reply_message(
             event.reply_token,
@@ -365,9 +401,9 @@ def handle_text(event):
         )
         return
 
-    # グラフ
     if text == "グラフ":
-        if not create_graph(user_id):
+        path = create_graph(user_id)
+        if not path:
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage("データなし")
@@ -381,7 +417,6 @@ def handle_text(event):
         )
         return
 
-    # 手入力
     match = re.match(r'^(\d+)\s*(.+)$', text)
 
     if match:
@@ -396,6 +431,7 @@ def handle_text(event):
         event.reply_token,
         TextSendMessage("『1000 食費』で入力")
     )
+
 
 # ======================
 # IMAGE OCR
@@ -440,20 +476,27 @@ def handle_image(event):
             TextSendMessage("OCRエラー")
         )
 
+
 # ======================
-# RUN
+# ROUTES
 # ======================
 @app.route("/")
 def home():
     return "OK", 200
 
+
 @app.route("/graph/<user_id>.png")
 def graph(user_id):
     return send_file(f"graph_{user_id}.png", mimetype="image/png")
+
 
 @app.route("/report/<user_id>.pdf")
 def report(user_id):
     return send_file(f"report_{user_id}.pdf", mimetype="application/pdf")
 
+
+# ======================
+# RUN
+# ======================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
