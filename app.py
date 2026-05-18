@@ -61,9 +61,7 @@ try:
 
         plt.rcParams["font.family"] = "DejaVu Sans"
 
-except Exception as e:
-
-    print(e)
+except:
 
     plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -90,9 +88,6 @@ pool = SimpleConnectionPool(
 
 OCR_LIMIT = 20
 
-# Vision client使い回し
-vision_client = vision.ImageAnnotatorClient()
-
 # ======================
 # DB
 # ======================
@@ -110,12 +105,12 @@ def put_conn(conn):
 def init_db():
 
     conn = get_conn()
-    cur = None
 
     try:
 
         cur = conn.cursor()
 
+        # expenses
         cur.execute("""
             CREATE TABLE IF NOT EXISTS expenses (
                 id SERIAL PRIMARY KEY,
@@ -127,7 +122,23 @@ def init_db():
             )
         """)
 
-        
+        conn.commit()
+
+        # store列追加（既存DB対策）
+        try:
+
+            cur.execute("""
+                ALTER TABLE expenses
+                ADD COLUMN store TEXT
+            """)
+
+            conn.commit()
+
+        except:
+
+            conn.rollback()
+
+        # OCR logs
         cur.execute("""
             CREATE TABLE IF NOT EXISTS ocr_logs (
                 id SERIAL PRIMARY KEY,
@@ -136,6 +147,7 @@ def init_db():
             )
         """)
 
+        # budgets
         cur.execute("""
             CREATE TABLE IF NOT EXISTS budgets (
                 user_id TEXT PRIMARY KEY,
@@ -143,6 +155,7 @@ def init_db():
             )
         """)
 
+        # users
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
@@ -154,9 +167,7 @@ def init_db():
 
     finally:
 
-        if cur:
-            cur.close()
-
+        cur.close()
         put_conn(conn)
 
 init_db()
@@ -171,7 +182,6 @@ def handle_follow(event):
     user_id = event.source.user_id
 
     conn = get_conn()
-    cur = None
 
     try:
 
@@ -187,9 +197,7 @@ def handle_follow(event):
 
     finally:
 
-        if cur:
-            cur.close()
-
+        cur.close()
         put_conn(conn)
 
 # ======================
@@ -199,7 +207,6 @@ def handle_follow(event):
 def get_all_users():
 
     conn = get_conn()
-    cur = None
 
     try:
 
@@ -216,9 +223,7 @@ def get_all_users():
 
     finally:
 
-        if cur:
-            cur.close()
-
+        cur.close()
         put_conn(conn)
 
 # ======================
@@ -233,7 +238,6 @@ def save_expense(
 ):
 
     conn = get_conn()
-    cur = None
 
     try:
 
@@ -258,19 +262,104 @@ def save_expense(
 
     finally:
 
-        if cur:
-            cur.close()
-
+        cur.close()
         put_conn(conn)
 
 # ======================
-# 履歴削除
+# 最新削除
+# ======================
+
+def delete_latest(user_id):
+
+    conn = get_conn()
+
+    try:
+
+        cur = conn.cursor()
+
+        cur.execute("""
+            DELETE FROM expenses
+            WHERE id = (
+                SELECT id
+                FROM expenses
+                WHERE user_id=%s
+                ORDER BY created_at DESC
+                LIMIT 1
+            )
+            RETURNING id
+        """, (user_id,))
+
+        deleted = cur.fetchone()
+
+        conn.commit()
+
+        return deleted is not None
+
+    finally:
+
+        cur.close()
+        put_conn(conn)
+
+# ======================
+# 今月削除
+# ======================
+
+def delete_month(user_id):
+
+    conn = get_conn()
+
+    try:
+
+        cur = conn.cursor()
+
+        cur.execute("""
+            DELETE FROM expenses
+            WHERE user_id=%s
+            AND DATE_TRUNC('month', created_at)
+                = DATE_TRUNC('month', CURRENT_DATE)
+        """, (user_id,))
+
+        conn.commit()
+
+    finally:
+
+        cur.close()
+        put_conn(conn)
+
+# ======================
+# 履歴取得
+# ======================
+
+def get_recent_expenses(user_id):
+
+    conn = get_conn()
+
+    try:
+
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT id, category, amount, store
+            FROM expenses
+            WHERE user_id=%s
+            ORDER BY created_at DESC
+            LIMIT 10
+        """, (user_id,))
+
+        return cur.fetchall()
+
+    finally:
+
+        cur.close()
+        put_conn(conn)
+
+# ======================
+# ID削除
 # ======================
 
 def delete_by_id(expense_id, user_id):
 
     conn = get_conn()
-    cur = None
 
     try:
 
@@ -289,39 +378,7 @@ def delete_by_id(expense_id, user_id):
 
     finally:
 
-        if cur:
-            cur.close()
-
-        put_conn(conn)
-
-# ======================
-# 履歴取得
-# ======================
-
-def get_recent_expenses(user_id):
-
-    conn = get_conn()
-    cur = None
-
-    try:
-
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT id, category, amount, store
-            FROM expenses
-            WHERE user_id=%s
-            ORDER BY created_at DESC
-            LIMIT 10
-        """, (user_id,))
-
-        return cur.fetchall()
-
-    finally:
-
-        if cur:
-            cur.close()
-
+        cur.close()
         put_conn(conn)
 
 # ======================
@@ -331,7 +388,6 @@ def get_recent_expenses(user_id):
 def get_monthly_ocr_count(user_id):
 
     conn = get_conn()
-    cur = None
 
     try:
 
@@ -349,9 +405,7 @@ def get_monthly_ocr_count(user_id):
 
     finally:
 
-        if cur:
-            cur.close()
-
+        cur.close()
         put_conn(conn)
 
 # ======================
@@ -361,7 +415,6 @@ def get_monthly_ocr_count(user_id):
 def save_ocr_log(user_id):
 
     conn = get_conn()
-    cur = None
 
     try:
 
@@ -376,9 +429,7 @@ def save_ocr_log(user_id):
 
     finally:
 
-        if cur:
-            cur.close()
-
+        cur.close()
         put_conn(conn)
 
 # ======================
@@ -388,7 +439,6 @@ def save_ocr_log(user_id):
 def get_month_data(user_id):
 
     conn = get_conn()
-    cur = None
 
     try:
 
@@ -406,9 +456,7 @@ def get_month_data(user_id):
 
     finally:
 
-        if cur:
-            cur.close()
-
+        cur.close()
         put_conn(conn)
 
 # ======================
@@ -430,11 +478,6 @@ def create_graph(user_id):
     labels = list(data.keys())
     values = list(data.values())
 
-    graph_path = f"graph_{user_id}.png"
-
-    if os.path.exists(graph_path):
-        os.remove(graph_path)
-
     plt.figure(figsize=(6,6))
 
     plt.pie(
@@ -444,6 +487,8 @@ def create_graph(user_id):
     )
 
     plt.title("今月の支出")
+
+    graph_path = f"graph_{user_id}.png"
 
     plt.savefig(graph_path)
 
@@ -457,9 +502,11 @@ def create_graph(user_id):
 
 def detect_text_from_image(image_content):
 
+    client = vision.ImageAnnotatorClient()
+
     image = vision.Image(content=image_content)
 
-    response = vision_client.document_text_detection(
+    response = client.document_text_detection(
         image=image
     )
 
@@ -540,7 +587,7 @@ def extract_store_name(text):
         if re.search(r'\d{4,}', line):
             continue
 
-        return line[:20]
+        return line
 
     return "不明"
 
@@ -571,17 +618,30 @@ def extract_receipt_info(text):
 
             if keyword.lower() in clean.lower():
 
-                clean = re.sub(r'[^\d]', '', line)
-nums = re.findall(r'\d{2,7}', clean)
+                nums = re.findall(
+                    r'(\d{2,6})',
+                    clean
+                )
 
                 for n in nums:
 
-                    n = int(n)
+                    candidates.append(int(n))
 
-                    if 50 <= n <= 99999:
-                        candidates.append(n)
+    if candidates:
 
-    amount = max(candidates) if candidates else None
+        amount = candidates[-1]
+
+    else:
+
+        nums = re.findall(
+            r'\d{2,6}',
+            text
+        )
+
+        amount = (
+            max(map(int, nums))
+            if nums else None
+        )
 
     store = extract_store_name(text)
 
@@ -635,9 +695,6 @@ def fetch_weather(city, lat, lon):
     if not all([max_list, min_list, rain_list, h_t, h_c]):
         return "⚠️ 天気情報を取得できません"
 
-    if len(h_t) <= 15 or len(h_c) <= 15:
-        return "⚠️ 天気情報不足"
-
     max_t = max_list[0]
     min_t = min_list[0]
     rain = rain_list[0]
@@ -669,9 +726,8 @@ def callback():
 
         handler.handle(body, signature)
 
-    except Exception as e:
+    except:
 
-        print(e)
         print(traceback.format_exc())
 
     return "OK"
@@ -688,7 +744,7 @@ def home():
 # graph
 # ======================
 
-@app.route("/graph/<user_id>/<token>")
+@app.route("/graph/<user_id>.png")
 def graph(user_id):
 
     return send_file(
@@ -734,50 +790,21 @@ def send_weather():
 def handle_text(event):
 
     text = event.message.text.strip()
+
     user_id = event.source.user_id
 
     try:
 
-        # ======================
-        # 使い方
-        # ======================
-        if text == "使い方":
-
-            help_text = (
-                "📘 使い方\n\n"
-                "① 支出登録\n"
-                "・100 コンビニ\n\n"
-                "② OCR（レシート）\n"
-                "・画像を送るだけ\n\n"
-                "③ グラフ\n"
-                "・グラフ\n\n"
-                "④ 今月合計\n"
-                "・今月\n\n"
-                "⑤ 履歴削除\n"
-                "・削除_履歴\n\n"
-                "⑥ 削除\n"
-                "・履歴からボタンで削除\n\n"
-                "⑦ キャンセル\n"
-                "・キャンセル"
-            )
-
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=help_text)
-            )
-            return
-
-        # ======================
         # OCR登録
-        # ======================
         if text.startswith("OK_"):
 
             parts = text.split("_")
 
             amount = int(parts[1])
-            category = parts[2]
-            store = "".join(parts[3:])[:20]
 
+            category = parts[2]
+
+            store = "_".join(parts[3:])
 
             save_expense(
                 user_id,
@@ -797,46 +824,21 @@ def handle_text(event):
                     )
                 )
             )
+
             return
 
-        # ======================
-        # OCRキャンセル
-        # ======================
-        if text == "キャンセル":
-
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="キャンセルしたよ")
-            )
-            return
-
-        # ======================
-        # 履歴削除実行
-        # ======================
-        if text.startswith("確認削除_"):
-
-            expense_id = int(text.replace("確認削除_", ""))
-
-            delete_by_id(expense_id, user_id)
-
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="削除したよ👍")
-            )
-            return
-
-        # ======================
         # グラフ
-        # ======================
         if text == "グラフ":
 
             graph_path = create_graph(user_id)
 
             if not graph_path:
+
                 line_bot_api.reply_message(
                     event.reply_token,
                     TextSendMessage("データなし")
                 )
+
                 return
 
             line_bot_api.reply_message(
@@ -846,47 +848,49 @@ def handle_text(event):
                     preview_image_url=f"{BASE_URL}/graph/{user_id}.png"
                 )
             )
+
             return
 
-        # ======================
         # 今月
-        # ======================
         if text == "今月":
 
             rows = get_month_data(user_id)
 
-            total = sum(amount for _, amount in rows)
+            total = sum(
+                amount for _, amount in rows
+            )
 
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text=f"今月合計：{total}円")
+                TextSendMessage(
+                    text=f"今月合計：{total}円"
+                )
             )
+
             return
 
-        # ======================
         # 履歴削除
-        # ======================
         if text == "削除_履歴":
 
             rows = get_recent_expenses(user_id)
 
             if not rows:
+
                 line_bot_api.reply_message(
                     event.reply_token,
                     TextSendMessage("履歴なし")
                 )
+
                 return
 
             columns = []
 
-            for expense_id, category, amount, store in rows[:10]:
-
-                label = (store or category)[:20]
+            for expense_id, category, amount, store in rows:
 
                 columns.append(
                     CarouselColumn(
                         title="削除確認",
-                        text=f"{label}:{amount}円",
+                        text=f"{store or category}:{amount}円",
                         actions=[
                             MessageAction(
                                 label="この履歴を削除",
@@ -898,26 +902,35 @@ def handle_text(event):
 
             carousel = TemplateSendMessage(
                 alt_text="履歴削除",
-                template=CarouselTemplate(columns=columns)
+                template=CarouselTemplate(
+                    columns=columns
+                )
             )
 
             line_bot_api.reply_message(
                 event.reply_token,
                 carousel
             )
+
             return
 
-        # ======================
-        # 通常入力（100 コンビニ）
-        # ======================
-        match = re.match(r'^(\d+)\s*(.+)$', text)
+        # 通常入力
+        match = re.match(
+            r'^(\d+)\s*(.+)$',
+            text
+        )
 
         if match:
 
             amount = int(match.group(1))
+
             category = match.group(2).strip()
 
-            save_expense(user_id, amount, category)
+            save_expense(
+                user_id,
+                amount,
+                category
+            )
 
             line_bot_api.reply_message(
                 event.reply_token,
@@ -925,19 +938,19 @@ def handle_text(event):
                     text=f"{category}:{amount}円 登録OK👍"
                 )
             )
+
             return
 
-        # ======================
-        # デフォルト
-        # ======================
+        # 未対応
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="『使い方』と入力してね！")
+            TextSendMessage(
+                text="『使い方』と入力してね！"
+            )
         )
 
-    except Exception as e:
+    except:
 
-        print(e)
         print(traceback.format_exc())
 
         line_bot_api.reply_message(
@@ -956,7 +969,9 @@ def handle_image(event):
 
     try:
 
-        current_count = get_monthly_ocr_count(user_id)
+        current_count = get_monthly_ocr_count(
+            user_id
+        )
 
         if current_count >= OCR_LIMIT:
 
@@ -969,62 +984,61 @@ def handle_image(event):
                     )
                 )
             )
+
             return
 
-        # ======================
-        # 画像取得（ここが正解）
-        # ======================
         message_content = line_bot_api.get_message_content(
             event.message.id
         )
 
-        image_bytes = b"".join(message_content.iter_content())
+        image_bytes = message_content.content
 
-
-        # ======================
-        # OCR
-        # ======================
-        text = detect_text_from_image(image_bytes)
+        text = detect_text_from_image(
+            image_bytes
+        )
 
         print(text)
 
         info = extract_receipt_info(text)
 
         amount = info["amount"]
-        store = (info["store"] or "不明")[:20]
+        store = info["store"]
         category = info["category"]
 
         if not amount:
 
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="金額読み取れなかった😢")
+                TextSendMessage(
+                    text="金額読み取れなかった😢"
+                )
             )
+
             return
 
         save_ocr_log(user_id)
 
-        remain = OCR_LIMIT - (current_count + 1)
-
-        confirm_text = (
-            f"店舗：{store}\n"
-            f"カテゴリ：{category}\n"
-            f"金額：{amount}円\n\n"
-            f"登録する？\n"
-            f"残り:{remain}回"
+        remain = OCR_LIMIT - (
+            current_count + 1
         )
-
-        confirm_text = confirm_text[:240]
 
         confirm = TemplateSendMessage(
             alt_text="確認",
             template=ConfirmTemplate(
-                text=confirm_text,
+                text=(
+                    f"店舗：{store}\n"
+                    f"カテゴリ：{category}\n"
+                    f"金額：{amount}円\n\n"
+                    f"登録する？\n"
+                    f"残り:{remain}回"
+                ),
                 actions=[
+
                     MessageAction(
                         label="はい",
                         text=f"OK_{amount}_{category}_{store}"
                     ),
+
                     MessageAction(
                         label="いいえ",
                         text="キャンセル"
@@ -1038,8 +1052,8 @@ def handle_image(event):
             confirm
         )
 
-    except Exception as e:
-        print(e)
+    except:
+
         print(traceback.format_exc())
 
         line_bot_api.reply_message(
