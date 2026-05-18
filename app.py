@@ -599,7 +599,7 @@ def extract_receipt_info(text):
 amount = None
 
 # ① 合計系を最優先で探す
-for line in lines:
+for line in filtered_lines:
 
     clean = line.replace(",", "")
 
@@ -610,6 +610,7 @@ for line in lines:
         if nums:
             amount = int(nums[-1])
             break
+
 
 # ② ¥付き金額を次に優先
 if amount is None:
