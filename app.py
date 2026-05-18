@@ -501,15 +501,20 @@ def create_graph(user_id):
 # ======================
 
 def detect_text_from_image(image_bytes):
+
     client = vision.ImageAnnotatorClient()
+
     image = vision.Image(content=image_bytes)
+
     response = client.text_detection(image=image)
+
     texts = response.text_annotations
 
     if not texts:
         return ""
 
     return texts[0].description
+
 
 
 def extract_receipt_info(text):
