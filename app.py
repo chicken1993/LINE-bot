@@ -539,7 +539,7 @@ def classify_category(store):
     if not store:
         return "その他"
 
-    if "セブン" in store or "ローソン" in store or "ファミリーマート" in store:
+    if any(x in store for x in ["セブン", "ローソン", "ファミリーマート"]):
         return "コンビニ"
 
     if "スターバックス" in store:
@@ -561,7 +561,9 @@ def extract_receipt_info(text):
 
     candidates = []
 
+    # ======================
     # ノイズ除去
+    # ======================
     text = re.sub(r'T\d{13}', '', text)
     text = re.sub(r'\b\d{13}\b', '', text)
     text = re.sub(r'\d{2,4}-\d{2,4}-\d{3,4}', '', text)
@@ -580,52 +582,64 @@ def extract_receipt_info(text):
 
         filtered_lines.append(line)
 
-    # 合計抽出
+    # ======================
+    # 合計候補抽出
+    # ======================
     for line in filtered_lines:
 
         clean = line.replace(",", "")
 
         if any(k.lower() in clean.lower() for k in total_keywords):
 
-            nums = re.findall(r'\b\d{3,6}\b', clean)
+            nums = re.findall(r'\d{3,7}', clean)
 
             for n in nums:
                 candidates.append(int(n))
 
-# ======================
-# 金額決定（改善版）
-# ======================
+    # ======================
+    # 金額決定
+    # ======================
+    amount = None
 
-amount = None
+    # ① 合計優先
+    for line in filtered_lines:
 
-# ① 合計系を最優先で探す
-for line in filtered_lines:
+        clean = line.replace(",", "")
 
-    clean = line.replace(",", "")
+        if any(k.lower() in clean.lower() for k in total_keywords):
 
-    if any(k.lower() in clean.lower() for k in total_keywords):
+            nums = re.findall(r'\d{3,7}', clean)
 
-        nums = re.findall(r'\d{3,7}', clean)
+            if nums:
+                amount = int(nums[-1])
+                break
 
-        if nums:
-            amount = int(nums[-1])
-            break
+    # ② ¥付き
+    if amount is None:
 
+        yen_nums = re.findall(r'¥\s*([\d,]+)', text)
 
-# ② ¥付き金額を次に優先
-if amount is None:
+        if yen_nums:
+            amount = int(yen_nums[-1].replace(",", ""))
 
-    yen_nums = re.findall(r'¥\s*([\d,]+)', text)
+    # ③ 保険
+    if amount is None:
 
-    if yen_nums:
-        amount = int(yen_nums[-1].replace(",", ""))
+        nums = re.findall(r'\b\d{3,7}\b', text)
 
-# ③ 最後の保険（弱い候補）
-if amount is None:
+        amount = max(map(int, nums)) if nums else None
 
-    nums = re.findall(r'\b\d{3,7}\b', text)
+    # ======================
+    # 店舗・カテゴリ
+    # ======================
+    store = extract_store_name(text)
+    category = classify_category(store)
 
-    amount = max(map(int, nums)) if nums else None
+    return {
+        "amount": amount,
+        "store": store,
+        "category": category
+    }
 
 
 
