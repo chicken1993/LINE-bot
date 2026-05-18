@@ -592,12 +592,10 @@ def extract_store_name(text):
     return "不明"
 
 # ======================
-# OCR解析
+# OCR解析（改善版・完全修正）
 # ======================
 
 def extract_receipt_info(text):
-
-    lines = text.splitlines()
 
     total_keywords = [
         "合計",
@@ -610,33 +608,39 @@ def extract_receipt_info(text):
 
     candidates = []
 
+    # ======================
+    # ① ノイズ除去（重要強化）
+    # ======================
+    text = re.sub(r'T\d{13}', '', text)
+    text = re.sub(r'\b\d{13}\b', '', text)
+
+    # ★追加：電話番号・長い番号も除外
+    text = re.sub(r'\b\d{10,12}\b', '', text)
+
+    lines = text.splitlines()
+
     for line in lines:
 
         clean = line.replace(",", "")
 
-        for keyword in total_keywords:
+        if any(keyword.lower() in clean.lower() for keyword in total_keywords):
 
-            if keyword.lower() in clean.lower():
+            # ★数字抽出は安全側に寄せる
+            nums = re.findall(r'\b\d{3,6}\b', clean)
 
-                nums = re.findall(
-                    r'(\d{2,6})',
-                    clean
-                )
+            for n in nums:
+                candidates.append(int(n))
 
-                for n in nums:
-
-                    candidates.append(int(n))
-
+    # ======================
+    # ② 合計判定
+    # ======================
     if candidates:
 
         amount = candidates[-1]
 
     else:
 
-        nums = re.findall(
-            r'\d{2,6}',
-            text
-        )
+        nums = re.findall(r'\b\d{3,6}\b', text)
 
         amount = (
             max(map(int, nums))
@@ -644,7 +648,6 @@ def extract_receipt_info(text):
         )
 
     store = extract_store_name(text)
-
     category = classify_category(store)
 
     return {
