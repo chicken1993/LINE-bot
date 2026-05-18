@@ -127,20 +127,7 @@ def init_db():
             )
         """)
 
-        conn.commit()
-
-        try:
-
-            cur.execute("""
-                ALTER TABLE expenses
-                ADD COLUMN store TEXT
-            """)
-
-            conn.commit()
-
-        except:
-            conn.rollback()
-
+        
         cur.execute("""
             CREATE TABLE IF NOT EXISTS ocr_logs (
                 id SERIAL PRIMARY KEY,
@@ -749,20 +736,48 @@ def send_weather():
 def handle_text(event):
 
     text = event.message.text.strip()
-
     user_id = event.source.user_id
 
     try:
 
+        # ======================
+        # 使い方
+        # ======================
+        if text == "使い方":
+
+            help_text = (
+                "📘 使い方\n\n"
+                "① 支出登録\n"
+                "・100 コンビニ\n\n"
+                "② OCR（レシート）\n"
+                "・画像を送るだけ\n\n"
+                "③ グラフ\n"
+                "・グラフ\n\n"
+                "④ 今月合計\n"
+                "・今月\n\n"
+                "⑤ 履歴削除\n"
+                "・削除_履歴\n\n"
+                "⑥ 削除\n"
+                "・履歴からボタンで削除\n\n"
+                "⑦ キャンセル\n"
+                "・キャンセル"
+            )
+
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=help_text)
+            )
+            return
+
+        # ======================
         # OCR登録
+        # ======================
         if text.startswith("OK_"):
 
             parts = text.split("_")
 
             amount = int(parts[1])
-
             category = parts[2]
-
             store = "_".join(parts[3:])[:20]
 
             save_expense(
@@ -783,96 +798,84 @@ def handle_text(event):
                     )
                 )
             )
-
             return
 
+        # ======================
         # OCRキャンセル
+        # ======================
         if text == "キャンセル":
 
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(
-                    text="キャンセルしたよ"
-                )
+                TextSendMessage(text="キャンセルしたよ")
             )
-
             return
 
+        # ======================
         # 履歴削除実行
+        # ======================
         if text.startswith("確認削除_"):
 
-            expense_id = int(
-                text.replace("確認削除_", "")
-            )
+            expense_id = int(text.replace("確認削除_", ""))
 
-            delete_by_id(
-                expense_id,
-                user_id
-            )
+            delete_by_id(expense_id, user_id)
 
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(
-                    text="削除したよ👍"
-                )
+                TextSendMessage(text="削除したよ👍")
             )
-
             return
 
+        # ======================
         # グラフ
+        # ======================
         if text == "グラフ":
 
             graph_path = create_graph(user_id)
 
             if not graph_path:
-
                 line_bot_api.reply_message(
                     event.reply_token,
                     TextSendMessage("データなし")
                 )
-
                 return
 
             line_bot_api.reply_message(
                 event.reply_token,
                 ImageSendMessage(
-                    original_content_url=f"{BASE_URL}/graph/{user_id}",
-                    preview_image_url=f"{BASE_URL}/graph/{user_id}"
+                    original_content_url=f"{BASE_URL}/graph/{user_id}.png",
+                    preview_image_url=f"{BASE_URL}/graph/{user_id}.png"
                 )
             )
-
             return
 
+        # ======================
         # 今月
+        # ======================
         if text == "今月":
 
             rows = get_month_data(user_id)
 
-            total = sum(
-                amount for _, amount in rows
-            )
+            total = sum(amount for _, amount in rows)
 
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(
-                    text=f"今月合計：{total}円"
-                )
+                TextSendMessage(text=f"今月合計：{total}円")
             )
-
             return
 
+        # ======================
         # 履歴削除
+        # ======================
         if text == "削除_履歴":
 
             rows = get_recent_expenses(user_id)
 
             if not rows:
-
                 line_bot_api.reply_message(
                     event.reply_token,
                     TextSendMessage("履歴なし")
                 )
-
                 return
 
             columns = []
@@ -896,35 +899,26 @@ def handle_text(event):
 
             carousel = TemplateSendMessage(
                 alt_text="履歴削除",
-                template=CarouselTemplate(
-                    columns=columns
-                )
+                template=CarouselTemplate(columns=columns)
             )
 
             line_bot_api.reply_message(
                 event.reply_token,
                 carousel
             )
-
             return
 
-        # 通常入力
-        match = re.match(
-            r'^(\d+)\s*(.+)$',
-            text
-        )
+        # ======================
+        # 通常入力（100 コンビニ）
+        # ======================
+        match = re.match(r'^(\d+)\s*(.+)$', text)
 
         if match:
 
             amount = int(match.group(1))
-
             category = match.group(2).strip()
 
-            save_expense(
-                user_id,
-                amount,
-                category
-            )
+            save_expense(user_id, amount, category)
 
             line_bot_api.reply_message(
                 event.reply_token,
@@ -932,14 +926,14 @@ def handle_text(event):
                     text=f"{category}:{amount}円 登録OK👍"
                 )
             )
-
             return
 
+        # ======================
+        # デフォルト
+        # ======================
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(
-                text="『使い方』と入力してね！"
-            )
+            TextSendMessage(text="『使い方』と入力してね！")
         )
 
     except Exception as e:
@@ -981,11 +975,8 @@ def handle_image(event):
 
             return
 
-        message_content = line_bot_api.get_message_content(
-            event.message.id
-        )
+        image_bytes = b"".join(message_content.iter_content())
 
-        image_bytes = message_content.content
 
         text = detect_text_from_image(
             image_bytes
@@ -996,7 +987,7 @@ def handle_image(event):
         info = extract_receipt_info(text)
 
         amount = info["amount"]
-        store = info["store"][:20]
+        store = (info["store"] or "不明")[:20]
         category = info["category"]
 
         if not amount:
