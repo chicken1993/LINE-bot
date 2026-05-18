@@ -500,101 +500,6 @@ def create_graph(user_id):
 # OCR
 # ======================
 
-def detect_text_from_image(image_content):
-
-    client = vision.ImageAnnotatorClient()
-
-    image = vision.Image(content=image_content)
-
-    response = client.document_text_detection(
-        image=image
-    )
-
-    texts = response.text_annotations
-
-    if texts:
-        return texts[0].description
-
-    return ""
-
-# ======================
-# カテゴリ判定
-# ======================
-
-CATEGORY_RULES = {
-
-    "食費": [
-        "セブン",
-        "ファミマ",
-        "ローソン",
-        "イオン",
-        "スーパー",
-        "マックスバリュ",
-        "ドンキ"
-    ],
-
-    "交通": [
-        "ENEOS",
-        "JR",
-        "PASMO",
-        "Suica"
-    ],
-
-    "日用品": [
-        "マツキヨ",
-        "ウエルシア",
-        "ツルハ"
-    ]
-}
-
-def classify_category(store_name):
-
-    for category, keywords in CATEGORY_RULES.items():
-
-        for keyword in keywords:
-
-            if keyword.lower() in store_name.lower():
-
-                return category
-
-    return "その他"
-
-# ======================
-# 店舗名抽出
-# ======================
-
-def extract_store_name(text):
-
-    lines = text.splitlines()
-
-    ignore_words = [
-        "TEL",
-        "レシート",
-        "領収書",
-        "営業時間"
-    ]
-
-    for line in lines[:8]:
-
-        line = line.strip()
-
-        if len(line) < 2:
-            continue
-
-        if any(w in line for w in ignore_words):
-            continue
-
-        if re.search(r'\d{4,}', line):
-            continue
-
-        return line
-
-    return "不明"
-
-# ======================
-# OCR解析（改善版・完全修正）
-# ======================
-
 def extract_receipt_info(text):
 
     total_keywords = [
@@ -609,27 +514,72 @@ def extract_receipt_info(text):
     candidates = []
 
     # ======================
-    # ① ノイズ除去（重要強化）
+    # ① ノイズ除去（強化版）
     # ======================
+
+    # 事業者番号
     text = re.sub(r'T\d{13}', '', text)
     text = re.sub(r'\b\d{13}\b', '', text)
 
-    # ★追加：電話番号・長い番号も除外
+    # 電話番号（ハイフンあり）
+    text = re.sub(r'\d{2,4}-\d{2,4}-\d{3,4}', '', text)
+
+    # 電話・ID系（連続数字）
     text = re.sub(r'\b\d{10,12}\b', '', text)
 
     lines = text.splitlines()
 
+    # ======================
+    # ② 行レベルノイズ除去
+    # ======================
+    filtered_lines = []
+
     for line in lines:
+
+        line = line.strip()
+        clean = line.replace(",", "")
+
+        # ★数字だけの短い行は除外（これが重要）
+        if re.fullmatch(r'\d{1,4}', clean):
+            continue
+
+        filtered_lines.append(line)
+
+    # ======================
+    # ③ 合計抽出優先
+    # ======================
+    for line in filtered_lines:
 
         clean = line.replace(",", "")
 
         if any(keyword.lower() in clean.lower() for keyword in total_keywords):
 
-            # ★数字抽出は安全側に寄せる
             nums = re.findall(r'\b\d{3,6}\b', clean)
 
             for n in nums:
                 candidates.append(int(n))
+
+    # ======================
+    # ④ 金額決定
+    # ======================
+    if candidates:
+        amount = candidates[-1]   # 合計は最後優先
+    else:
+        nums = re.findall(r'\b\d{3,6}\b', text)
+        amount = max(map(int, nums)) if nums else None
+
+    # ======================
+    # ⑤ 店舗・カテゴリ
+    # ======================
+    store = extract_store_name(text)
+    category = classify_category(store)
+
+    return {
+        "amount": amount,
+        "store": store,
+        "category": category
+    }
+
 
     # ======================
     # ② 合計判定
