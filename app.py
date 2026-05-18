@@ -501,13 +501,9 @@ def create_graph(user_id):
 # ======================
 
 def detect_text_from_image(image_bytes):
-
     client = vision.ImageAnnotatorClient()
-
     image = vision.Image(content=image_bytes)
-
     response = client.text_detection(image=image)
-
     texts = response.text_annotations
 
     if not texts:
@@ -515,6 +511,21 @@ def detect_text_from_image(image_bytes):
 
     return texts[0].description
 
+
+def extract_store_name(text):   # ← ★これを追加
+    lines = text.splitlines()
+
+    for line in lines:
+        if "セブン" in line:
+            return "セブン-イレブン"
+        if "ローソン" in line:
+            return "ローソン"
+        if "ファミリーマート" in line:
+            return "ファミリーマート"
+        if "ミニストップ" in line:
+            return "ミニストップ"
+
+    return lines[0] if lines else "不明"
 
 
 def extract_receipt_info(text):
