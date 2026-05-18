@@ -496,9 +496,15 @@ def create_graph(user_id):
 
     return graph_path
 
+
+
 # ======================
 # OCR
 # ======================
+
+import re
+from google.cloud import vision
+
 
 def detect_text_from_image(image_bytes):
     client = vision.ImageAnnotatorClient()
@@ -512,7 +518,7 @@ def detect_text_from_image(image_bytes):
     return texts[0].description
 
 
-def extract_store_name(text):   # ← ★これを追加
+def extract_store_name(text):
     lines = text.splitlines()
 
     for line in lines:
@@ -528,6 +534,20 @@ def extract_store_name(text):   # ← ★これを追加
     return lines[0] if lines else "不明"
 
 
+def classify_category(store):
+
+    if not store:
+        return "その他"
+
+    if "セブン" in store or "ローソン" in store or "ファミリーマート" in store:
+        return "コンビニ"
+
+    if "スターバックス" in store:
+        return "カフェ"
+
+    return "食費"
+
+
 def extract_receipt_info(text):
 
     total_keywords = [
@@ -541,64 +561,44 @@ def extract_receipt_info(text):
 
     candidates = []
 
-    # ======================
-    # ① ノイズ除去（強化版）
-    # ======================
-
-    # 事業者番号
+    # ノイズ除去
     text = re.sub(r'T\d{13}', '', text)
     text = re.sub(r'\b\d{13}\b', '', text)
-
-    # 電話番号（ハイフンあり）
     text = re.sub(r'\d{2,4}-\d{2,4}-\d{3,4}', '', text)
-
-    # 電話・ID系（連続数字）
     text = re.sub(r'\b\d{10,12}\b', '', text)
 
     lines = text.splitlines()
 
-    # ======================
-    # ② 行レベルノイズ除去
-    # ======================
     filtered_lines = []
 
     for line in lines:
-
         line = line.strip()
         clean = line.replace(",", "")
 
-        # ★数字だけの短い行は除外（これが重要）
         if re.fullmatch(r'\d{1,4}', clean):
             continue
 
         filtered_lines.append(line)
 
-    # ======================
-    # ③ 合計抽出優先
-    # ======================
+    # 合計抽出
     for line in filtered_lines:
 
         clean = line.replace(",", "")
 
-        if any(keyword.lower() in clean.lower() for keyword in total_keywords):
+        if any(k.lower() in clean.lower() for k in total_keywords):
 
             nums = re.findall(r'\b\d{3,6}\b', clean)
 
             for n in nums:
                 candidates.append(int(n))
 
-    # ======================
-    # ④ 金額決定
-    # ======================
+    # 金額決定
     if candidates:
-        amount = candidates[-1]   # 合計は最後優先
+        amount = candidates[-1]
     else:
         nums = re.findall(r'\b\d{3,6}\b', text)
         amount = max(map(int, nums)) if nums else None
 
-    # ======================
-    # ⑤ 店舗・カテゴリ
-    # ======================
     store = extract_store_name(text)
     category = classify_category(store)
 
@@ -609,30 +609,7 @@ def extract_receipt_info(text):
     }
 
 
-    # ======================
-    # ② 合計判定
-    # ======================
-    if candidates:
 
-        amount = candidates[-1]
-
-    else:
-
-        nums = re.findall(r'\b\d{3,6}\b', text)
-
-        amount = (
-            max(map(int, nums))
-            if nums else None
-        )
-
-    store = extract_store_name(text)
-    category = classify_category(store)
-
-    return {
-        "amount": amount,
-        "store": store,
-        "category": category
-    }
 
 # ======================
 # 天気
