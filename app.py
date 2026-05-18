@@ -613,6 +613,8 @@ def callback():
 
     body = request.get_data(as_text=True)
 
+    print(body)
+
     signature = request.headers.get(
         "X-Line-Signature"
     )
@@ -630,6 +632,7 @@ def callback():
 # ======================
 # home
 # ======================
+
 
 @app.route("/")
 def home():
