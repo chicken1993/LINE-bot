@@ -592,22 +592,39 @@ def extract_receipt_info(text):
             for n in nums:
                 candidates.append(int(n))
 
-    # 金額決定
-    if candidates:
-        amount = candidates[-1]
-    else:
-        nums = re.findall(r'\b\d{3,6}\b', text)
-        amount = max(map(int, nums)) if nums else None
+# ======================
+# 金額決定（改善版）
+# ======================
 
-    store = extract_store_name(text)
-    category = classify_category(store)
+amount = None
 
-    return {
-        "amount": amount,
-        "store": store,
-        "category": category
-    }
+# ① 合計系を最優先で探す
+for line in lines:
 
+    clean = line.replace(",", "")
+
+    if any(k.lower() in clean.lower() for k in total_keywords):
+
+        nums = re.findall(r'\d{3,7}', clean)
+
+        if nums:
+            amount = int(nums[-1])
+            break
+
+# ② ¥付き金額を次に優先
+if amount is None:
+
+    yen_nums = re.findall(r'¥\s*([\d,]+)', text)
+
+    if yen_nums:
+        amount = int(yen_nums[-1].replace(",", ""))
+
+# ③ 最後の保険（弱い候補）
+if amount is None:
+
+    nums = re.findall(r'\b\d{3,7}\b', text)
+
+    amount = max(map(int, nums)) if nums else None
 
 
 
